@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/ui-core",
+  "crates/ui-wasm",
+  "crates/cdp-runner",
+]
