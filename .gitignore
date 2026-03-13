@@ -1,0 +1,8 @@
+/target/
+/examples/web/pkg/
+**/*.rs.bk
+.DS_Store
+.idea/
+.vscode/
+*.swp
+Cargo.lock   # keep for libraries; remove this line for binaries if desired
