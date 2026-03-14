@@ -22,6 +22,7 @@ pub struct TextAtlas {
     glyphs: HashMap<char, Glyph>,
     dirty: bool,
     font: Option<Font>,
+    generation: u64,
 }
 
 impl TextAtlas {
@@ -37,7 +38,13 @@ impl TextAtlas {
             glyphs: HashMap::new(),
             dirty: true,
             font: None,
+            generation: 0,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn set_font_bytes(&mut self, bytes: Vec<u8>) {
@@ -49,6 +56,7 @@ impl TextAtlas {
             self.pixels.fill(0);
             self.pixels[0] = 255;
             self.dirty = true;
+            self.generation += 1;
         }
     }
 
@@ -113,10 +121,29 @@ impl TextAtlas {
             self.row_h = 0.0;
         }
         if self.cursor.y + h as f32 + padding > self.height as f32 {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::warn_1(
+                &format!(
+                    "TextAtlas overflow: atlas {}x{} full, clearing glyph cache (generation {})",
+                    self.width,
+                    self.height,
+                    self.generation + 1,
+                )
+                .into(),
+            );
+            #[cfg(not(target_arch = "wasm32"))]
+            eprintln!(
+                "TextAtlas overflow: atlas {}x{} full, clearing glyph cache (generation {})",
+                self.width,
+                self.height,
+                self.generation + 1,
+            );
             self.cursor = Vec2::new(1.0, 1.0);
             self.row_h = 0.0;
             self.glyphs.clear();
             self.pixels.fill(0);
+            self.pixels[0] = 255;
+            self.generation += 1;
         }
         let x = self.cursor.x as u32;
         let y = self.cursor.y as u32;
@@ -126,4 +153,3 @@ impl TextAtlas {
         (x, y)
     }
 }
-
