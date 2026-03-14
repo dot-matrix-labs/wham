@@ -747,64 +747,84 @@ impl Ui {
         /// Maximum ms gap between clicks to count as a multi-click sequence.
         const DOUBLE_CLICK_MS: f64 = 400.0;
 
-        // Collect the events we need (borrow-checker: copy out what we need).
-        let events: Vec<InputEvent> = self.events.clone();
+        // Collect only the pointer events we need into a small local buffer,
+        // avoiding a full clone of self.events.
+        #[derive(Clone, Copy)]
+        enum PointerAction {
+            Down(Vec2),
+            Move(Vec2),
+            Up,
+        }
 
-        for event in &events {
-            match event {
-                InputEvent::PointerDown(ev) => {
-                    if rect.contains(ev.pos) && ev.button == Some(PointerButton::Left) {
-                        let idx = self.position_to_index(rect, buffer, ev.pos);
+        let actions: Vec<PointerAction> = self
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                InputEvent::PointerDown(ev)
+                    if rect.contains(ev.pos) && ev.button == Some(PointerButton::Left) =>
+                {
+                    Some(PointerAction::Down(ev.pos))
+                }
+                InputEvent::PointerMove(ev) => Some(PointerAction::Move(ev.pos)),
+                InputEvent::PointerUp(ev) if ev.button == Some(PointerButton::Left) => {
+                    Some(PointerAction::Up)
+                }
+                _ => None,
+            })
+            .collect();
 
-                        // --- Multi-click detection ---
-                        let same_target = self.last_click_id == Some(id);
-                        let within_time = (self.time_ms - self.last_click_time) < DOUBLE_CLICK_MS;
-                        if same_target && within_time {
-                            self.click_count = self.click_count.saturating_add(1);
-                        } else {
-                            self.click_count = 1;
+        for action in &actions {
+            match *action {
+                PointerAction::Down(pos) => {
+                    let idx = self.position_to_index(rect, buffer, pos);
+
+                    // --- Multi-click detection ---
+                    let same_target = self.last_click_id == Some(id);
+                    let within_time = (self.time_ms - self.last_click_time) < DOUBLE_CLICK_MS;
+                    if same_target && within_time {
+                        self.click_count = self.click_count.saturating_add(1);
+                    } else {
+                        self.click_count = 1;
+                    }
+                    self.last_click_time = self.time_ms;
+                    self.last_click_id = Some(id);
+
+                    match self.click_count {
+                        1 => {
+                            // Single click: place caret, begin drag.
+                            buffer.set_caret(idx);
+                            self.dragging = Some(id);
+                            self.selection_anchor = Some(idx);
                         }
-                        self.last_click_time = self.time_ms;
-                        self.last_click_id = Some(id);
-
-                        match self.click_count {
-                            1 => {
-                                // Single click: place caret, begin drag.
-                                buffer.set_caret(idx);
-                                self.dragging = Some(id);
-                                self.selection_anchor = Some(idx);
-                            }
-                            2 => {
-                                // Double click: select the word at the click position.
-                                buffer.select_word_at(idx);
-                                self.dragging = None; // no drag after word-select
-                                self.selection_anchor = None;
-                            }
-                            _ => {
-                                // Triple (or more) click: select the whole logical line.
-                                buffer.select_line_at(idx);
-                                self.dragging = None;
-                                self.selection_anchor = None;
-                            }
+                        2 => {
+                            // Double click: select the word at the click position.
+                            buffer.select_word_at(idx);
+                            self.dragging = None; // no drag after word-select
+                            self.selection_anchor = None;
+                        }
+                        _ => {
+                            // Triple (or more) click: select the whole logical line.
+                            buffer.select_line_at(idx);
+                            self.dragging = None;
+                            self.selection_anchor = None;
                         }
                     }
                 }
-                InputEvent::PointerMove(ev) => {
+                PointerAction::Move(pos) => {
                     if self.dragging == Some(id) {
-                        let idx = self.position_to_index(rect, buffer, ev.pos);
+                        let idx = self.position_to_index(rect, buffer, pos);
                         let start = self.selection_anchor.unwrap_or(buffer.caret().index);
                         buffer.set_selection(start, idx);
-                        // TODO: if ev.pos is outside rect horizontally, nudge
+                        // TODO: if pos is outside rect horizontally, nudge
                         // self.scroll_offsets[id] to auto-scroll the viewport.
                     }
                 }
-                InputEvent::PointerUp(ev) => {
-                    if self.dragging == Some(id) && ev.button == Some(PointerButton::Left) {
+                PointerAction::Up => {
+                    if self.dragging == Some(id) {
                         self.dragging = None;
                         self.selection_anchor = None;
                     }
                 }
-                _ => {}
             }
         }
     }

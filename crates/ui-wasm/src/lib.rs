@@ -43,7 +43,7 @@ impl WasmApp {
 
     pub fn frame(&mut self, timestamp_ms: f64) -> Result<JsValue, JsValue> {
         let output = self.demo.frame(self.width, self.height, self.scale, timestamp_ms);
-        self.renderer.render(&output.batch, &output.text_runs)?;
+        self.renderer.render(output.batch, output.text_runs)?;
         Ok(output.a11y_json)
     }
 

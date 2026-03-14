@@ -57,11 +57,11 @@ impl Renderer {
         self.atlas.set_font_bytes(bytes);
     }
 
-    pub fn render(&mut self, batch: &Batch, text_runs: &[TextRun]) -> Result<(), JsValue> {
-        let mut merged = batch.clone();
+    pub fn render(&mut self, mut batch: Batch, text_runs: Vec<TextRun>) -> Result<(), JsValue> {
         for run in text_runs {
-            self.push_text_quads(&mut merged, run.clone());
+            self.push_text_quads(&mut batch, run);
         }
+        let merged = batch;
         self.upload_atlas_if_needed();
         self.draw_batch(&merged)
     }

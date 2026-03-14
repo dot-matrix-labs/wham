@@ -124,8 +124,8 @@ impl DemoApp {
 
         let a11y = self.ui.end_frame();
         self.clipboard_request = self.ui.clipboard_request.clone();
-        let batch = self.ui.batch.clone();
-        let text_runs = batch.text_runs.clone();
+        let mut batch = std::mem::take(&mut self.ui.batch);
+        let text_runs = std::mem::take(&mut batch.text_runs);
         let serializer =
             serde_wasm_bindgen::Serializer::new().serialize_large_number_types_as_bigints(true);
         let a11y_json = a11y.serialize(&serializer).unwrap_or(JsValue::NULL);
