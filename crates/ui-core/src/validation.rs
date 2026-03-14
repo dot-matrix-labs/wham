@@ -1,5 +1,11 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+
+fn email_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[^\s@]+@[^\s@]+\.[^\s@]+$").expect("valid email regex"))
+}
 
 use crate::form::{FieldValue, FormPath};
 
@@ -72,14 +78,11 @@ pub fn validate_value(path: &FormPath, value: &FieldValue, rules: &[ValidationRu
             }
             ValidationRule::Email => {
                 if let FieldValue::Text(text) = value {
-                    let re = Regex::new(r"^[^\s@]+@[^\s@]+\.[^\s@]+$");
-                    if let Ok(re) = re {
-                        if !re.is_match(text) {
-                            errors.push(ValidationError {
-                                path: path.clone(),
-                                message: "Please enter a valid email address.".to_string(),
-                            });
-                        }
+                    if !email_regex().is_match(text) {
+                        errors.push(ValidationError {
+                            path: path.clone(),
+                            message: "Please enter a valid email address.".to_string(),
+                        });
                     }
                 }
             }

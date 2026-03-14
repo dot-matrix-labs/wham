@@ -520,7 +520,7 @@ impl Ui {
         });
 
         if focused {
-            let show_caret = (self.time_ms as u64 / 500) % 2 == 0;
+            let show_caret = (self.time_ms as u64 / 500).is_multiple_of(2);
             if show_caret {
                 let caret_pos = self.index_to_position(rect, buffer, buffer.caret().index, multiline);
                 let caret_rect = Rect::new(caret_pos.x, caret_pos.y, 1.5, 18.0 * self.scale);
@@ -831,8 +831,7 @@ impl Ui {
         let line_height = font_size * 1.4;
         let char_width = font_size * 0.6;
         let mut remaining = index;
-        let mut line = 0;
-        for line_text in buffer.text().split('\n') {
+        for (line, line_text) in buffer.text().split('\n').enumerate() {
             let graphemes = line_text.graphemes(true).count();
             if remaining <= graphemes {
                 let x = rect.x + padding + remaining as f32 * char_width;
@@ -840,7 +839,6 @@ impl Ui {
                 return Vec2::new(x, y);
             }
             remaining = remaining.saturating_sub(graphemes + 1);
-            line += 1;
         }
         Vec2::new(rect.x + padding, rect.y + padding)
     }

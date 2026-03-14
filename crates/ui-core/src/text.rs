@@ -495,12 +495,10 @@ impl TextBuffer {
         if grapheme_index == 0 {
             return 0;
         }
-        let mut count = 0;
-        for (byte_index, _) in self.text.grapheme_indices(true) {
+        for (count, (byte_index, _)) in self.text.grapheme_indices(true).enumerate() {
             if count == grapheme_index {
                 return byte_index;
             }
-            count += 1;
         }
         self.text.len()
     }

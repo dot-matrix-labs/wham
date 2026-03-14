@@ -371,14 +371,12 @@ impl Form {
                             }
                         }
                     }
-                } else {
-                    if let Some(state) = self.state.fields.get(&field_path) {
-                        if let FieldValue::Group(group) = &state.value {
-                            for child in fields {
-                                if let Some(value) = group.get(&child.id) {
-                                    let child_path = field_path.push(child.id.clone());
-                                    out.extend(validate_value(&child_path, value, &child.rules));
-                                }
+                } else if let Some(state) = self.state.fields.get(&field_path) {
+                    if let FieldValue::Group(group) = &state.value {
+                        for child in fields {
+                            if let Some(value) = group.get(&child.id) {
+                                let child_path = field_path.push(child.id.clone());
+                                out.extend(validate_value(&child_path, value, &child.rules));
                             }
                         }
                     }
