@@ -94,5 +94,18 @@ impl WasmApp {
     pub fn take_clipboard_request(&mut self) -> Option<String> {
         self.demo.take_clipboard_request()
     }
+
+    /// Returns the focused widget's bounding rect as [x, y, w, h] in canvas
+    /// pixels, or `null` if no widget is focused.
+    pub fn focused_widget_rect(&self) -> JsValue {
+        match self.demo.focused_widget_rect() {
+            Some([x, y, w, h]) => {
+                let arr = js_sys::Float32Array::new_with_length(4);
+                arr.copy_from(&[x, y, w, h]);
+                arr.into()
+            }
+            None => JsValue::NULL,
+        }
+    }
 }
 

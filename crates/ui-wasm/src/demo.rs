@@ -303,6 +303,12 @@ impl DemoApp {
         self.clipboard_request.take()
     }
 
+    /// Returns the bounding rect (x, y, w, h) of the currently focused widget,
+    /// or `None` if nothing is focused.
+    pub fn focused_widget_rect(&self) -> Option<[f32; 4]> {
+        self.ui.focused_widget_rect().map(|r| [r.x, r.y, r.w, r.h])
+    }
+
     pub fn handle_pointer_down(&mut self, x: f32, y: f32, button: u16, ctrl: bool, alt: bool, shift: bool, meta: bool) {
         let event = InputEvent::PointerDown(PointerEvent {
             pos: ui_core::types::Vec2::new(x, y),

@@ -964,6 +964,15 @@ fn widget_role(kind: WidgetKind) -> A11yRole {
 }
 
 impl Ui {
+    /// Returns the bounding rect of the currently focused widget, if any.
+    pub fn focused_widget_rect(&self) -> Option<Rect> {
+        let focused_id = self.focused?;
+        self.widgets
+            .iter()
+            .find(|w| w.id == focused_id)
+            .map(|w| w.rect)
+    }
+
     fn ui_label_inline(&mut self, text: &str) {
         let rect = self.layout.next_rect(22.0 * self.scale);
         self.batch.text_runs.push(TextRun {
