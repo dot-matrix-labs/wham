@@ -114,6 +114,7 @@ Phase 0 (critical foundation fixes) is complete. The prototype validates the ren
 |---|---|
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | System architecture, module boundaries, data flow, memory model |
 | [`ENGINEERING.md`](ENGINEERING.md) | Goals, constraints, patterns, known defects, implementation plan |
+| [`critique.md`](critique.md) | Independent engineering review — critical issues, structural concerns, what's solid |
 | [`docs/prior-art.md`](docs/prior-art.md) | Evaluation of 12 Wasm UI frameworks and why we build from scratch |
 | [`docs/api.md`](docs/api.md) | Widget API, text editing, form model, batching |
 | [`docs/accessibility.md`](docs/accessibility.md) | Screen reader support, keyboard navigation, high contrast |
