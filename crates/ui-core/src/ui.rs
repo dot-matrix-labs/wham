@@ -1468,22 +1468,11 @@ mod tests {
     use crate::form::{FieldSchema, FieldType, FormSchema};
 
     fn simple_form_schema() -> FormSchema {
-        FormSchema {
-            fields: vec![
-                FieldSchema {
-                    id: "name".into(),
-                    label: "Name".into(),
-                    field_type: FieldType::Text,
-                    rules: vec![],
-                },
-                FieldSchema {
-                    id: "email".into(),
-                    label: "Email".into(),
-                    field_type: FieldType::Text,
-                    rules: vec![],
-                },
-            ],
-        }
+        FormSchema::new("test")
+            .field("name", FieldType::Text)
+            .with_label("name", "Name")
+            .field("email", FieldType::Text)
+            .with_label("email", "Email")
     }
 
     #[test]
@@ -1558,14 +1547,9 @@ mod tests {
     #[test]
     fn text_input_masked_for_works() {
         let mut ui = test_ui();
-        let schema = FormSchema {
-            fields: vec![FieldSchema {
-                id: "password".into(),
-                label: "Password".into(),
-                field_type: FieldType::Text,
-                rules: vec![],
-            }],
-        };
+        let schema = FormSchema::new("test")
+            .field("password", FieldType::Text)
+            .with_label("password", "Password");
         let mut form = Form::new(schema);
         let path = FormPath::root().push("password");
 

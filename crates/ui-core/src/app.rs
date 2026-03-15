@@ -15,7 +15,7 @@ use crate::ui::Ui;
 ///
 /// impl FormApp for MyApp {
 ///     fn schema(&self) -> FormSchema {
-///         FormSchema { fields: vec![/* ... */] }
+///         FormSchema::new("my_form")
 ///     }
 ///
 ///     fn build(&mut self, ui: &mut Ui, form: &mut Form) {
@@ -77,14 +77,10 @@ mod tests {
 
     impl FormApp for TestApp {
         fn schema(&self) -> FormSchema {
-            FormSchema {
-                fields: vec![FieldSchema {
-                    id: "name".into(),
-                    label: "Name".into(),
-                    field_type: FieldType::Text,
-                    rules: vec![ValidationRule::Required],
-                }],
-            }
+            FormSchema::new("test")
+                .field("name", FieldType::Text)
+                .with_label("name", "Name")
+                .required("name")
         }
 
         fn build(&mut self, ui: &mut Ui, form: &mut Form) {
@@ -130,7 +126,7 @@ mod tests {
         struct MinimalApp;
         impl FormApp for MinimalApp {
             fn schema(&self) -> FormSchema {
-                FormSchema { fields: vec![] }
+                FormSchema::new("minimal")
             }
             fn build(&mut self, _ui: &mut Ui, _form: &mut Form) {}
         }
