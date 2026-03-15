@@ -122,8 +122,8 @@ impl DemoApp {
         }
 
         let a11y = self.ui.end_frame();
-        self.clipboard_request = self.ui.clipboard_request.clone();
-        let batch = std::mem::take(&mut self.ui.batch);
+        self.clipboard_request = self.ui.take_clipboard_request();
+        let batch = self.ui.take_batch();
         let serializer =
             serde_wasm_bindgen::Serializer::new().serialize_large_number_types_as_bigints(true);
         let a11y_json = a11y.serialize(&serializer).unwrap_or(JsValue::NULL);
@@ -316,7 +316,7 @@ impl DemoApp {
 
     /// Returns `true` if any widget currently has focus.
     pub fn has_focused_widget(&self) -> bool {
-        self.ui.focused.is_some()
+        self.ui.focused_id().is_some()
     }
 
     /// Returns the kind of the focused widget as a string, or `None`.
@@ -330,6 +330,7 @@ impl DemoApp {
             WidgetKind::TextInput => "textinput",
             WidgetKind::Select => "select",
             WidgetKind::Group => "group",
+            _ => "unknown",
         })
     }
 
@@ -406,26 +407,28 @@ impl DemoApp {
     }
 
     fn collect_errors(form: &Form) -> Vec<String> {
-        form.state
-            .fields
+        form.state()
+            .fields()
             .values()
             .flat_map(|field| field.errors.iter().cloned())
             .collect()
     }
 
     fn is_pending(form: &Form) -> bool {
-        form.state.fields.values().any(|field| field.pending)
+        form.state().fields().values().any(|field| field.pending)
     }
 
     fn show_errors(&mut self, errors: &[String]) {
         for error in errors {
-            self.ui.label_colored(error, self.ui.theme.colors.error);
+            let color = self.ui.theme().colors.error;
+            self.ui.label_colored(error, color);
         }
     }
 
     fn show_loading(&mut self, pending: bool) {
         if pending {
-            self.ui.label_colored("Loading...", self.ui.theme.colors.primary);
+            let color = self.ui.theme().colors.primary;
+            self.ui.label_colored("Loading...", color);
         }
     }
 }

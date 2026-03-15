@@ -111,7 +111,7 @@ pub struct FormSchema {
 /// `im::HashMap` provided no benefit while adding overhead.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FormState {
-    pub fields: HashMap<FormPath, FieldState>,
+    fields: HashMap<FormPath, FieldState>,
 }
 
 impl FormState {
@@ -119,6 +119,26 @@ impl FormState {
         Self {
             fields: HashMap::new(),
         }
+    }
+
+    /// Returns a reference to the fields map.
+    pub fn fields(&self) -> &HashMap<FormPath, FieldState> {
+        &self.fields
+    }
+
+    /// Returns a mutable reference to the fields map.
+    pub fn fields_mut(&mut self) -> &mut HashMap<FormPath, FieldState> {
+        &mut self.fields
+    }
+
+    /// Returns a reference to the field state at the given path, if it exists.
+    pub fn get_field(&self, path: &FormPath) -> Option<&FieldState> {
+        self.fields.get(path)
+    }
+
+    /// Returns a mutable reference to the field state at the given path.
+    pub fn get_field_mut(&mut self, path: &FormPath) -> Option<&mut FieldState> {
+        self.fields.get_mut(path)
     }
 }
 
@@ -142,11 +162,11 @@ pub enum FormEvent {
 
 #[derive(Clone, Debug)]
 pub struct Form {
-    pub schema: FormSchema,
-    pub state: Arc<FormState>,
-    pub history: History<FormState>,
-    pub pending: Option<PendingSubmission>,
-    pub last_error: Option<String>,
+    schema: FormSchema,
+    state: Arc<FormState>,
+    history: History<FormState>,
+    pending: Option<PendingSubmission>,
+    last_error: Option<String>,
     submit_counter: u64,
 }
 
@@ -161,6 +181,45 @@ impl Form {
             last_error: None,
             submit_counter: 0,
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Accessor methods
+    // -----------------------------------------------------------------
+
+    /// Returns a reference to the form schema.
+    pub fn schema(&self) -> &FormSchema {
+        &self.schema
+    }
+
+    /// Returns a reference to the current form state (wrapped in `Arc`).
+    pub fn state(&self) -> &FormState {
+        &self.state
+    }
+
+    /// Returns the `Arc<FormState>` for cheap cloning (e.g. snapshot comparisons).
+    pub fn state_arc(&self) -> Arc<FormState> {
+        self.state.clone()
+    }
+
+    /// Returns a reference to the history tracker.
+    pub fn history(&self) -> &History<FormState> {
+        &self.history
+    }
+
+    /// Returns a mutable reference to the history tracker.
+    pub fn history_mut(&mut self) -> &mut History<FormState> {
+        &mut self.history
+    }
+
+    /// Returns a reference to the pending submission, if any.
+    pub fn pending(&self) -> Option<&PendingSubmission> {
+        self.pending.as_ref()
+    }
+
+    /// Returns the last error message, if any.
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
     }
 
     fn build_initial_state(schema: &FormSchema) -> FormState {

@@ -25,10 +25,10 @@ pub struct DrawCmd {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Material {
     Solid,
     TextAtlas,
-    IconAtlas,
 }
 
 #[derive(Default, Debug, Clone)]

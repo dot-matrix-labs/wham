@@ -219,7 +219,7 @@ impl Renderer {
             match cmd.material {
                 Material::TextAtlas => self.bind_text_texture(),
                 Material::Solid => self.unbind_text_texture(),
-                Material::IconAtlas => self.bind_text_texture(),
+                _ => self.unbind_text_texture(),
             }
 
             if let Some(clip) = cmd.clip {

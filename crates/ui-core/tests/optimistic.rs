@@ -18,10 +18,10 @@ fn optimistic_submit_and_rollback() {
         FormEvent::SubmissionStarted(id) => id,
         _ => 0,
     };
-    let original = form.state.clone();
+    let original_field_count = form.state().fields().len();
     let _ = form.set_value(&FormPath(vec!["name".into()]), FieldValue::Text("B".into()));
     let rollback = form.apply_error(submit_id, "error", true);
     assert!(matches!(rollback, FormEvent::RolledBack(_)));
-    assert_eq!(form.state.fields.len(), original.fields.len());
+    assert_eq!(form.state().fields().len(), original_field_count);
 }
 

@@ -11,6 +11,7 @@ use crate::types::{Color, Rect, Vec2};
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WidgetKind {
     Label,
     Button,
@@ -55,31 +56,31 @@ impl Layout {
 }
 
 pub struct Ui {
-    pub theme: Theme,
-    pub batch: Batch,
-    pub layout: Layout,
-    pub widgets: Vec<WidgetInfo>,
-    pub events: Vec<InputEvent>,
-    pub focused: Option<u64>,
-    pub hovered: Option<u64>,
-    pub active: Option<u64>,
-    pub dragging: Option<u64>,
-    pub selection_anchor: Option<usize>,
-    pub hit_test: HitTestGrid,
-    pub scale: f32,
-    pub clipboard_request: Option<String>,
-    pub time_ms: f64,
+    theme: Theme,
+    batch: Batch,
+    layout: Layout,
+    widgets: Vec<WidgetInfo>,
+    events: Vec<InputEvent>,
+    focused: Option<u64>,
+    hovered: Option<u64>,
+    active: Option<u64>,
+    dragging: Option<u64>,
+    selection_anchor: Option<usize>,
+    hit_test: HitTestGrid,
+    scale: f32,
+    clipboard_request: Option<String>,
+    time_ms: f64,
     /// Number of rapid successive left-clicks on the same widget.
     /// 1 = single, 2 = double (select word), 3+ = triple (select line).
-    pub click_count: u8,
+    click_count: u8,
     /// Timestamp of the last pointer-down, used to detect double/triple clicks.
-    pub last_click_time: f64,
+    last_click_time: f64,
     /// Widget id that received the last click, used to reset count on target change.
-    pub last_click_id: Option<u64>,
+    last_click_id: Option<u64>,
     /// Scroll offsets per widget id (horizontal pixel offset into the text).
-    pub scroll_offsets: std::collections::HashMap<u64, f32>,
+    _scroll_offsets: std::collections::HashMap<u64, f32>,
     /// Whether the focused text input is in overwrite (insert-key toggle) mode.
-    pub overwrite_mode: bool,
+    overwrite_mode: bool,
     /// ID stack used to disambiguate widgets with identical labels.
     /// Values are pushed/popped by the caller (e.g. loop index) and mixed
     /// into every `hash_id` call so that repeated labels produce unique IDs.
@@ -106,11 +107,80 @@ impl Ui {
             click_count: 0,
             last_click_time: 0.0,
             last_click_id: None,
-            scroll_offsets: std::collections::HashMap::new(),
+            _scroll_offsets: std::collections::HashMap::new(),
             overwrite_mode: false,
             id_stack: Vec::new(),
         }
     }
+
+    // -----------------------------------------------------------------
+    // Accessor methods — public read access to internal state
+    // -----------------------------------------------------------------
+
+    /// Returns a reference to the current theme.
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    /// Returns a mutable reference to the current theme, allowing runtime
+    /// customization (e.g. switching to dark mode).
+    pub fn theme_mut(&mut self) -> &mut Theme {
+        &mut self.theme
+    }
+
+    /// Returns a reference to the current rendering batch.
+    /// The batch contains all vertices, indices, draw commands, and text runs
+    /// produced during the current frame.
+    pub fn batch(&self) -> &Batch {
+        &self.batch
+    }
+
+    /// Returns a mutable reference to the rendering batch.
+    pub fn batch_mut(&mut self) -> &mut Batch {
+        &mut self.batch
+    }
+
+    /// Takes ownership of the current batch, replacing it with an empty one.
+    /// This is the primary way for renderers to consume the frame's draw data
+    /// without cloning.
+    pub fn take_batch(&mut self) -> Batch {
+        std::mem::take(&mut self.batch)
+    }
+
+    /// Returns the widget ID of the currently focused widget, if any.
+    pub fn focused_id(&self) -> Option<u64> {
+        self.focused
+    }
+
+    /// Returns a reference to the clipboard request string, if a copy/cut
+    /// operation produced one during this frame.
+    pub fn clipboard_request(&self) -> Option<&str> {
+        self.clipboard_request.as_deref()
+    }
+
+    /// Takes the clipboard request, leaving `None` in its place.
+    pub fn take_clipboard_request(&mut self) -> Option<String> {
+        self.clipboard_request.take()
+    }
+
+    /// Returns a slice of all widgets registered during this frame.
+    pub fn widgets(&self) -> &[WidgetInfo] {
+        &self.widgets
+    }
+
+    /// Returns the current scale factor.
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    /// Returns the current frame timestamp in milliseconds.
+    pub fn time_ms(&self) -> f64 {
+        self.time_ms
+    }
+
+    // -----------------------------------------------------------------
+    // Frame lifecycle
+    // -----------------------------------------------------------------
 
     pub fn begin_frame(
         &mut self,
