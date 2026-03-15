@@ -115,6 +115,12 @@ impl WasmApp {
         self.renderer.reinitialize()
     }
 
+    /// Set focus to the widget with the given ID.
+    /// Called from the accessibility mirror when the screen reader moves focus.
+    pub fn set_focus(&mut self, id: f64) {
+        self.demo.set_focus(id as u64);
+    }
+
     /// Returns `true` if any widget currently has focus.
     pub fn has_focused_widget(&self) -> bool {
         self.demo.has_focused_widget()

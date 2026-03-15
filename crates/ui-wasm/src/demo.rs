@@ -302,6 +302,12 @@ impl DemoApp {
         self.clipboard_request.take()
     }
 
+    /// Set focus to the widget with the given ID.
+    /// Called from the accessibility mirror when the screen reader moves focus.
+    pub fn set_focus(&mut self, id: u64) {
+        self.ui.set_focus_by_id(id);
+    }
+
     /// Returns the bounding rect (x, y, w, h) of the currently focused widget,
     /// or `None` if nothing is focused.
     pub fn focused_widget_rect(&self) -> Option<[f32; 4]> {
