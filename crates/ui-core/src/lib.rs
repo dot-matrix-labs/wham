@@ -3,7 +3,6 @@ pub mod batch;
 pub mod form;
 pub mod hit_test;
 pub mod input;
-pub mod rest;
 pub mod state;
 pub mod text;
 pub mod theme;

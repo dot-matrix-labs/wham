@@ -99,6 +99,22 @@ impl WasmApp {
         self.demo.take_clipboard_request()
     }
 
+    /// Notify the renderer that the WebGL context has been lost.
+    ///
+    /// While the context is lost, `frame()` will skip all GPU work but
+    /// continue updating application state so no user data is lost.
+    pub fn notify_context_lost(&mut self) {
+        self.renderer.notify_context_lost();
+    }
+
+    /// Recreate all GPU resources after a WebGL context restoration.
+    ///
+    /// Must be called from the `webglcontextrestored` event handler.
+    /// Returns an error if resource creation fails.
+    pub fn reinitialize_renderer(&mut self) -> Result<(), JsValue> {
+        self.renderer.reinitialize()
+    }
+
     /// Returns the focused widget's bounding rect as [x, y, w, h] in canvas
     /// pixels, or `null` if no widget is focused.
     pub fn focused_widget_rect(&self) -> JsValue {

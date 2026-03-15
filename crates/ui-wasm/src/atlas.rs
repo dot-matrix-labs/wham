@@ -131,6 +131,16 @@ impl TextAtlas {
         self.dirty = false;
     }
 
+    /// Invalidate all cached glyphs so they are re-rasterized on next use.
+    ///
+    /// Called after WebGL context loss because the GPU texture backing the
+    /// atlas has been destroyed. The CPU-side pixel buffer is preserved so
+    /// that re-uploading is possible immediately after a new texture is
+    /// created.
+    pub fn invalidate_gpu_cache(&mut self) {
+        self.dirty = true;
+    }
+
     fn allocate(&mut self, w: u32, h: u32) -> (u32, u32) {
         let padding = 1.0;
         if self.cursor.x + w as f32 + padding > self.width as f32 {
