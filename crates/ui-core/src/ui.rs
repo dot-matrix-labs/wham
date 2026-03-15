@@ -459,7 +459,11 @@ impl Ui {
     }
 
     pub fn text_input(&mut self, label: &str, buffer: &mut TextBuffer, placeholder: &str) -> bool {
-        self.text_input_impl(label, buffer, placeholder, false, 40.0 * self.scale)
+        self.text_input_impl(label, buffer, placeholder, false, false, 40.0 * self.scale)
+    }
+
+    pub fn text_input_masked(&mut self, label: &str, buffer: &mut TextBuffer, placeholder: &str) -> bool {
+        self.text_input_impl(label, buffer, placeholder, false, true, 40.0 * self.scale)
     }
 
     pub fn text_input_multiline(
@@ -469,7 +473,7 @@ impl Ui {
         placeholder: &str,
         height: f32,
     ) -> bool {
-        self.text_input_impl(label, buffer, placeholder, true, height)
+        self.text_input_impl(label, buffer, placeholder, true, false, height)
     }
 
     fn text_input_impl(
@@ -478,6 +482,7 @@ impl Ui {
         buffer: &mut TextBuffer,
         placeholder: &str,
         multiline: bool,
+        masked: bool,
         height: f32,
     ) -> bool {
         let rect = self.layout.next_rect(height);
@@ -504,6 +509,8 @@ impl Ui {
         );
         let content = if buffer.text().is_empty() {
             placeholder.to_string()
+        } else if masked {
+            "\u{2022}".repeat(buffer.grapheme_len())
         } else {
             buffer.text().to_string()
         };
@@ -1214,6 +1221,64 @@ mod tests {
     // -----------------------------------------------------------------------
     // begin_frame clears per-frame state
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Password masking
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn masked_text_input_produces_bullet_text_runs() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        let mut buf = TextBuffer::new("secret");
+        ui.text_input_masked("Password", &mut buf, "");
+        // The text run should contain bullets, not the actual text
+        let text_run = ui.batch.text_runs.iter().find(|r| r.text.contains('\u{2022}')).unwrap();
+        assert_eq!(text_run.text, "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}");
+        assert!(!ui.batch.text_runs.iter().any(|r| r.text.contains("secret")));
+    }
+
+    #[test]
+    fn masked_text_input_preserves_actual_value() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        let mut buf = TextBuffer::new("hunter2");
+        ui.text_input_masked("Password", &mut buf, "");
+        // The underlying text must remain unchanged
+        assert_eq!(buf.text(), "hunter2");
+        // The widget value in the a11y tree should also have the real text
+        let widget = ui.widgets.iter().find(|w| w.label == "Password").unwrap();
+        assert_eq!(widget.value.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn masked_text_input_cursor_movement_works() {
+        let mut ui = test_ui();
+        let mut buf = TextBuffer::new("abc");
+        // Focus the password field so key events are processed
+        let id = ui.hash_id("Password");
+        ui.focused = Some(id);
+        // Simulate a left-arrow key event
+        let events = vec![InputEvent::KeyDown {
+            code: KeyCode::ArrowLeft,
+            modifiers: Modifiers { shift: false, ctrl: false, alt: false, meta: false },
+        }];
+        ui.begin_frame(events, 800.0, 600.0, 1.0, 0.0);
+        ui.text_input_masked("Password", &mut buf, "");
+        // Caret should have moved left by one
+        assert_eq!(buf.caret().index, 2);
+        assert_eq!(buf.text(), "abc");
+    }
+
+    #[test]
+    fn masked_empty_shows_placeholder() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        let mut buf = TextBuffer::new("");
+        ui.text_input_masked("Password", &mut buf, "enter password");
+        // Should show placeholder, not bullets
+        assert!(ui.batch.text_runs.iter().any(|r| r.text == "enter password"));
+    }
 
     #[test]
     fn begin_frame_clears_widgets_and_batch() {

@@ -139,7 +139,7 @@ impl DemoApp {
         if self.auth_mode == 0 {
             self.ui.label("Login");
             self.ui.text_input("Email", &mut self.login_email, "email@example.com");
-            self.ui.text_input("Password", &mut self.login_password, "password");
+            self.ui.text_input_masked("Password", &mut self.login_password, "password");
             if self.ui.button("Submit Login") {
                 let mut form = self.login_form.clone();
                 let _ = form.set_value(&FormPath(vec!["email".into()]), FieldValue::Text(self.login_email.text().to_string()));
@@ -155,8 +155,8 @@ impl DemoApp {
         } else {
             self.ui.label("Register");
             self.ui.text_input("Email", &mut self.register_email, "email@example.com");
-            self.ui.text_input("Password", &mut self.register_password, "password");
-            self.ui.text_input("Confirm Password", &mut self.register_confirm, "confirm");
+            self.ui.text_input_masked("Password", &mut self.register_password, "password");
+            self.ui.text_input_masked("Confirm Password", &mut self.register_confirm, "confirm");
             let roles = vec!["User".to_string(), "Admin".to_string(), "Viewer".to_string()];
             self.ui.select("Role", &roles, &mut self.register_role);
             if self.ui.button("Submit Register") {
