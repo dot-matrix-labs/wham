@@ -1,4 +1,5 @@
 pub mod accessibility;
+pub mod app;
 pub mod batch;
 pub mod form;
 pub mod hit_test;
@@ -11,6 +12,7 @@ pub mod ui;
 pub mod validation;
 
 pub use accessibility::{A11yNode, A11yRole, A11yState, A11yTree};
+pub use app::FormApp;
 pub use batch::{Batch, DrawCmd, Material, Quad, TextRun, Vertex};
 pub use form::{
     FieldId, FieldSchema, FieldState, FieldType, FieldValue, Form, FormEvent, FormPath, FormSchema,
