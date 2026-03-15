@@ -232,6 +232,11 @@ async function main() {
   }
 
   canvas.addEventListener("pointerdown", (e) => {
+    // Capture the pointer so that pointermove/pointerup events continue to
+    // fire even when the pointer leaves the canvas (e.g. during text
+    // selection drag).  The capture is released automatically on pointerup
+    // or via the explicit releasePointerCapture call below.
+    canvas.setPointerCapture(e.pointerId);
     app.handle_pointer_down(e.offsetX * dpr, e.offsetY * dpr, e.button, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
     // On touch devices, focus the hidden textarea so the virtual keyboard opens.
     if (e.pointerType === "touch") {
@@ -239,6 +244,7 @@ async function main() {
     }
   });
   canvas.addEventListener("pointerup", (e) => {
+    canvas.releasePointerCapture(e.pointerId);
     app.handle_pointer_up(e.offsetX * dpr, e.offsetY * dpr, e.button, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
   });
   canvas.addEventListener("pointermove", (e) => {
