@@ -34,22 +34,35 @@ jobs:
       - name: Run benchmarks
         run: cargo bench -p ui-core 2>&1 | tee bench-output.txt
 
+      - name: Parse criterion output to JSON
+        run: |
+          python3 -c "
+          import re, json, sys
+          results = []
+          for line in open('bench-output.txt'):
+              m = re.match(r'^(\S+)\s+time:\s+\[[\d.]+ [µmn]s ([\d.]+) ([µmn]s)', line)
+              if m:
+                  name, val, unit = m.group(1), float(m.group(2)), m.group(3)
+                  # normalize to nanoseconds
+                  mult = {'ns': 1, 'µs': 1000, 'ms': 1000000}
+                  ns = val * mult.get(unit, 1)
+                  results.append({'name': name, 'unit': 'ns', 'value': ns})
+          json.dump(results, open('bench-results.json', 'w'), indent=2)
+          print(f'Parsed {len(results)} benchmark results')
+          "
+
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: ui-core benchmarks
-          tool: criterionrs
-          output-file-path: bench-output.txt
+          tool: customSmallerIsBetter
+          output-file-path: bench-results.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          # On main: push results to gh-pages for tracking
           auto-push: ${{ github.ref == 'refs/heads/main' }}
-          # On PRs: post a comment with comparison
           comment-on-alert: true
           alert-comment-cc-users: '@${{ github.repository_owner }}'
-          # Fail if any benchmark regresses by more than 10%
           alert-threshold: '110%'
           fail-on-alert: ${{ github.event_name == 'pull_request' }}
-          # Compare against the stored baseline
           save-data-file: ${{ github.ref == 'refs/heads/main' }}
 
   wasm-size:
