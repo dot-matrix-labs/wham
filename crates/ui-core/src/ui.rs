@@ -1015,6 +1015,15 @@ impl Ui {
             .map(|w| w.rect)
     }
 
+    /// Returns the kind of the currently focused widget, if any.
+    pub fn focused_widget_kind(&self) -> Option<WidgetKind> {
+        let focused_id = self.focused?;
+        self.widgets
+            .iter()
+            .find(|w| w.id == focused_id)
+            .map(|w| w.kind)
+    }
+
     fn ui_label_inline(&mut self, text: &str) {
         let rect = self.layout.next_rect(22.0 * self.scale);
         self.batch.text_runs.push(TextRun {

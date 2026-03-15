@@ -308,6 +308,25 @@ impl DemoApp {
         self.ui.focused_widget_rect().map(|r| [r.x, r.y, r.w, r.h])
     }
 
+    /// Returns `true` if any widget currently has focus.
+    pub fn has_focused_widget(&self) -> bool {
+        self.ui.focused.is_some()
+    }
+
+    /// Returns the kind of the focused widget as a string, or `None`.
+    pub fn focused_widget_kind_str(&self) -> Option<&'static str> {
+        use ui_core::ui::WidgetKind;
+        self.ui.focused_widget_kind().map(|k| match k {
+            WidgetKind::Label => "label",
+            WidgetKind::Button => "button",
+            WidgetKind::Checkbox => "checkbox",
+            WidgetKind::Radio => "radio",
+            WidgetKind::TextInput => "textinput",
+            WidgetKind::Select => "select",
+            WidgetKind::Group => "group",
+        })
+    }
+
     pub fn handle_pointer_down(&mut self, x: f32, y: f32, button: u16, ctrl: bool, alt: bool, shift: bool, meta: bool) {
         let event = InputEvent::PointerDown(PointerEvent {
             pos: ui_core::types::Vec2::new(x, y),

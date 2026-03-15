@@ -246,7 +246,11 @@ async function main() {
   });
   canvas.addEventListener("wheel", (e) => {
     app.handle_wheel(e.offsetX * dpr, e.offsetY * dpr, e.deltaX, e.deltaY, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
-  });
+    // Prevent the page from scrolling when the canvas has a focused widget.
+    if (app.has_focused_widget()) {
+      e.preventDefault();
+    }
+  }, { passive: false });
 
   window.addEventListener("keydown", (e) => {
     const clipboardAction = isClipboardShortcut(e);
@@ -286,6 +290,20 @@ async function main() {
     }
 
     app.handle_key_down(e.keyCode, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
+
+    // Prevent browser defaults for keys that widgets handle when focused.
+    // We check focus state AFTER forwarding to Wasm because the key event
+    // may itself change focus (e.g. Tab moves focus to the next widget).
+    if (app.has_focused_widget()) {
+      const PREVENT_KEYS = new Set([
+        "Tab", "Backspace", "Enter", "Space",
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+      ]);
+      // Also prevent Space via its legacy key value " "
+      if (PREVENT_KEYS.has(e.key) || PREVENT_KEYS.has(e.code)) {
+        e.preventDefault();
+      }
+    }
   });
   window.addEventListener("keyup", (e) => {
     app.handle_key_up(e.keyCode, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
@@ -293,6 +311,12 @@ async function main() {
   window.addEventListener("beforeinput", (e) => {
     if (e.data) {
       app.handle_text_input(e.data);
+    }
+    // Prevent the browser from inserting text into the hidden textarea (or
+    // any other focused DOM element) when a canvas text widget owns focus.
+    const kind = app.focused_widget_kind();
+    if (kind === "textinput" || kind === "select") {
+      e.preventDefault();
     }
   });
   window.addEventListener("compositionstart", () => app.handle_composition_start());
