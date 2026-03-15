@@ -81,6 +81,26 @@ async function main() {
 
   const hiddenTextarea = createHiddenTextarea();
 
+  // --- WebGL context loss / restoration ---
+  let contextLost = false;
+
+  canvas.addEventListener("webglcontextlost", (e) => {
+    e.preventDefault();
+    contextLost = true;
+    app.notify_context_lost();
+    console.warn("[wham] WebGL context lost — rendering paused, form state preserved");
+  });
+
+  canvas.addEventListener("webglcontextrestored", () => {
+    console.info("[wham] WebGL context restored — reinitializing renderer");
+    try {
+      app.reinitialize_renderer();
+      contextLost = false;
+    } catch (err) {
+      console.error("[wham] Failed to reinitialize renderer after context restore:", err);
+    }
+  });
+
   window.addEventListener("resize", () => {
     resize();
     app.resize(canvas.width, canvas.height, dpr);
@@ -289,6 +309,10 @@ async function main() {
   });
 
   function frame(ts) {
+    if (contextLost) {
+      requestAnimationFrame(frame);
+      return;
+    }
     const a11y = app.frame(ts);
     window.__a11y = a11y;
 
