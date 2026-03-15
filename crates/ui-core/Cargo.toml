@@ -21,3 +21,11 @@ proptest = "1.4"
 [[bench]]
 name = "ui_bench"
 harness = false
+
+[[bench]]
+name = "batch_bench"
+harness = false
+
+[[bench]]
+name = "text_bench"
+harness = false
