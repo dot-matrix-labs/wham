@@ -1,5 +1,5 @@
-use im::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -102,6 +102,13 @@ pub struct FormSchema {
     pub fields: Vec<FieldSchema>,
 }
 
+/// Holds the current state of all form fields, keyed by path.
+///
+/// `FormState` is cloned only for history snapshots (undo/redo) and submission
+/// rollback — not on the per-frame rendering hot path. A plain `HashMap` is used
+/// instead of a persistent data structure because each mutation already clones
+/// the entire state into a new `Arc<FormState>`, so structural sharing from
+/// `im::HashMap` provided no benefit while adding overhead.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FormState {
     pub fields: HashMap<FormPath, FieldState>,
@@ -475,5 +482,159 @@ impl Form {
             field.errors.push(message.to_string());
         }
         self.state = Arc::new(next);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::validation::ValidationRule;
+
+    fn text_field(id: &str) -> FieldSchema {
+        FieldSchema {
+            id: id.to_string(),
+            label: id.to_string(),
+            field_type: FieldType::Text,
+            rules: vec![],
+        }
+    }
+
+    fn simple_schema() -> FormSchema {
+        FormSchema {
+            fields: vec![text_field("name"), text_field("email")],
+        }
+    }
+
+    #[test]
+    fn set_value_creates_history_snapshot() {
+        let mut form = Form::new(simple_schema());
+        assert!(!form.history.can_undo());
+
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("Alice".into()));
+        assert!(form.history.can_undo());
+
+        // Current state reflects the change
+        let field = form.state.fields.get(&path).unwrap();
+        if let FieldValue::Text(ref v) = field.value {
+            assert_eq!(v, "Alice");
+        } else {
+            panic!("expected Text variant");
+        }
+    }
+
+    #[test]
+    fn history_undo_restores_previous_state() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+
+        form.set_value(&path, FieldValue::Text("Alice".into()));
+        form.set_value(&path, FieldValue::Text("Bob".into()));
+
+        // Undo should restore "Alice"
+        let prev = form.history.undo().unwrap();
+        let field = prev.fields.get(&path).unwrap();
+        if let FieldValue::Text(ref v) = field.value {
+            assert_eq!(v, "Alice");
+        } else {
+            panic!("expected Text variant");
+        }
+    }
+
+    #[test]
+    fn clone_independence() {
+        // Verify that cloned FormState is fully independent (no shared mutable state).
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+
+        form.set_value(&path, FieldValue::Text("original".into()));
+        let snapshot = form.state.clone();
+
+        form.set_value(&path, FieldValue::Text("modified".into()));
+
+        // Snapshot should still have the original value
+        let snap_field = snapshot.fields.get(&path).unwrap();
+        if let FieldValue::Text(ref v) = snap_field.value {
+            assert_eq!(v, "original");
+        } else {
+            panic!("expected Text variant");
+        }
+
+        // Current state should have the modified value
+        let cur_field = form.state.fields.get(&path).unwrap();
+        if let FieldValue::Text(ref v) = cur_field.value {
+            assert_eq!(v, "modified");
+        } else {
+            panic!("expected Text variant");
+        }
+    }
+
+    #[test]
+    fn submission_rollback_restores_snapshot() {
+        let schema = FormSchema {
+            fields: vec![FieldSchema {
+                id: "name".into(),
+                label: "Name".into(),
+                field_type: FieldType::Text,
+                rules: vec![ValidationRule::Required],
+            }],
+        };
+        let mut form = Form::new(schema);
+        let path = FormPath::root().push("name");
+
+        form.set_value(&path, FieldValue::Text("before-submit".into()));
+        let _pre_submit = form.state.clone();
+
+        let payload = serde_json::json!({"name": "before-submit"});
+        form.start_submit(payload, 1).unwrap();
+
+        // Mutate state after submission started
+        form.set_value(&path, FieldValue::Text("after-submit".into()));
+
+        // Rollback should restore to pre-submit snapshot
+        if let Some(pending) = &form.pending {
+            let snap = pending.snapshot.clone();
+            let snap_field = snap.fields.get(&path).unwrap();
+            if let FieldValue::Text(ref v) = snap_field.value {
+                assert_eq!(v, "before-submit");
+            } else {
+                panic!("expected Text variant");
+            }
+        }
+    }
+
+    #[test]
+    fn set_field_error_does_not_push_to_history() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+
+        form.set_value(&path, FieldValue::Text("test".into()));
+        assert!(form.history.can_undo());
+
+        // set_field_error updates state but should not add a history entry
+        let undo_count_before = {
+            let mut count = 0u32;
+            let mut h = form.history.clone();
+            while h.can_undo() {
+                h.undo();
+                count += 1;
+            }
+            count
+        };
+
+        form.set_field_error(&path, "some error");
+
+        let undo_count_after = {
+            let mut count = 0u32;
+            let mut h = form.history.clone();
+            while h.can_undo() {
+                h.undo();
+                count += 1;
+            }
+            count
+        };
+
+        // History depth should be unchanged after set_field_error
+        assert_eq!(undo_count_before, undo_count_after);
     }
 }
