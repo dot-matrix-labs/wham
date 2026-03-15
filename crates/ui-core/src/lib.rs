@@ -33,6 +33,7 @@ pub use validation::{ValidationError, ValidationRule};
 /// ```
 pub mod prelude {
     pub use crate::accessibility::{A11yNode, A11yRole, A11yState, A11yTree};
+    pub use crate::app::FormApp;
     pub use crate::batch::{Batch, DrawCmd, Quad, TextRun, Vertex};
     pub use crate::form::{
         FieldId, FieldSchema, FieldType, FieldValue, Form, FormEvent, FormPath, FormSchema,
