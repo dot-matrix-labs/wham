@@ -115,6 +115,20 @@ impl WasmApp {
         self.renderer.reinitialize()
     }
 
+    /// Returns `true` if any widget currently has focus.
+    pub fn has_focused_widget(&self) -> bool {
+        self.demo.has_focused_widget()
+    }
+
+    /// Returns the kind of the focused widget as a string (e.g. "textinput",
+    /// "button"), or `null` if no widget is focused.
+    pub fn focused_widget_kind(&self) -> JsValue {
+        match self.demo.focused_widget_kind_str() {
+            Some(kind) => JsValue::from_str(kind),
+            None => JsValue::NULL,
+        }
+    }
+
     /// Returns the focused widget's bounding rect as [x, y, w, h] in canvas
     /// pixels, or `null` if no widget is focused.
     pub fn focused_widget_rect(&self) -> JsValue {
