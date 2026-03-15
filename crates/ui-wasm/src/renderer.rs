@@ -292,7 +292,7 @@ pub fn resolve_text_runs(batch: &mut Batch, atlas: &mut TextAtlas) {
                 continue;
             }
             // Glyph is guaranteed to be cached from the first pass.
-            let glyph = atlas.get_cached_glyph(ch).cloned().unwrap_or_else(|| {
+            let glyph = atlas.get_cached_glyph(ch, font_size).cloned().unwrap_or_else(|| {
                 // Fallback: rasterize on demand (should not happen).
                 atlas.ensure_glyph(ch, font_size)
             });
