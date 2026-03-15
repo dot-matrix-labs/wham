@@ -15,6 +15,7 @@ pub struct Renderer {
     atlas_texture: WebGlTexture,
     width: f32,
     height: f32,
+    context_valid: bool,
 }
 
 impl Renderer {
@@ -23,10 +24,8 @@ impl Renderer {
             .get_context("webgl2")?
             .ok_or_else(|| JsValue::from_str("WebGL2 not supported"))?
             .dyn_into()?;
-        let program = link_program(&gl, VERT_SHADER, FRAG_SHADER)?;
-        let vbo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no vbo"))?;
-        let ibo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no ibo"))?;
-        let atlas_texture = gl.create_texture().ok_or_else(|| JsValue::from_str("no texture"))?;
+
+        let (program, vbo, ibo, atlas_texture) = create_gpu_resources(&gl)?;
 
         gl.use_program(Some(&program));
         gl.enable(Gl::BLEND);
@@ -41,10 +40,50 @@ impl Renderer {
             atlas_texture,
             width,
             height,
+            context_valid: true,
         };
         renderer.init_atlas_texture();
         renderer.resize(width, height);
         Ok(renderer)
+    }
+
+    /// Returns `true` if the WebGL context is currently valid for rendering.
+    pub fn is_context_valid(&self) -> bool {
+        self.context_valid
+    }
+
+    /// Mark the context as lost. Called from JS when the `webglcontextlost`
+    /// event fires. While the context is lost, `render()` is a no-op.
+    pub fn notify_context_lost(&mut self) {
+        self.context_valid = false;
+    }
+
+    /// Recreate all GPU resources after a WebGL context restoration.
+    ///
+    /// The GL context object itself survives context loss (the browser resets
+    /// its internal state but the JS/Rust wrapper remains valid), so we only
+    /// need to recreate shaders, programs, buffers, textures, and re-upload
+    /// the glyph atlas.
+    pub fn reinitialize(&mut self) -> Result<(), JsValue> {
+        let (program, vbo, ibo, atlas_texture) = create_gpu_resources(&self.gl)?;
+
+        self.program = program;
+        self.vbo = vbo;
+        self.ibo = ibo;
+        self.atlas_texture = atlas_texture;
+
+        self.gl.use_program(Some(&self.program));
+        self.gl.enable(Gl::BLEND);
+        self.gl.blend_func(Gl::SRC_ALPHA, Gl::ONE_MINUS_SRC_ALPHA);
+
+        // The atlas pixel data in CPU memory is still valid; mark it dirty so
+        // the full texture is re-uploaded on the next frame.
+        self.atlas.invalidate_gpu_cache();
+        self.init_atlas_texture();
+        self.resize(self.width, self.height);
+
+        self.context_valid = true;
+        Ok(())
     }
 
     pub fn resize(&mut self, width: f32, height: f32) {
@@ -58,6 +97,9 @@ impl Renderer {
     }
 
     pub fn render(&mut self, mut batch: Batch, text_runs: Vec<TextRun>) -> Result<(), JsValue> {
+        if !self.context_valid {
+            return Ok(());
+        }
         for run in text_runs {
             self.push_text_quads(&mut batch, run);
         }
@@ -251,6 +293,17 @@ impl Renderer {
     }
 }
 
+/// Create all GPU resources (shader program, VBO, IBO, atlas texture).
+///
+/// This is called both at initial construction and after context restoration.
+fn create_gpu_resources(gl: &Gl) -> Result<(WebGlProgram, WebGlBuffer, WebGlBuffer, WebGlTexture), JsValue> {
+    let program = link_program(gl, VERT_SHADER, FRAG_SHADER)?;
+    let vbo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no vbo"))?;
+    let ibo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no ibo"))?;
+    let atlas_texture = gl.create_texture().ok_or_else(|| JsValue::from_str("no texture"))?;
+    Ok((program, vbo, ibo, atlas_texture))
+}
+
 fn compile_shader(gl: &Gl, source: &str, shader_type: u32) -> Result<WebGlShader, JsValue> {
     let shader = gl
         .create_shader(shader_type)
@@ -292,15 +345,15 @@ fn link_program(gl: &Gl, vert_src: &str, frag_src: &str) -> Result<WebGlProgram,
     }
 }
 
-const VERT_SHADER: &str = r#"
-attribute vec2 a_pos;
-attribute vec2 a_uv;
-attribute vec4 a_color;
-attribute float a_flags;
+const VERT_SHADER: &str = r#"#version 300 es
+in vec2 a_pos;
+in vec2 a_uv;
+in vec4 a_color;
+in float a_flags;
 uniform vec2 u_resolution;
-varying vec2 v_uv;
-varying vec4 v_color;
-varying float v_flags;
+out vec2 v_uv;
+out vec4 v_color;
+out float v_flags;
 void main() {
   vec2 zeroToOne = a_pos / u_resolution;
   vec2 zeroToTwo = zeroToOne * 2.0;
@@ -312,18 +365,19 @@ void main() {
 }
 "#;
 
-const FRAG_SHADER: &str = r#"
+const FRAG_SHADER: &str = r#"#version 300 es
 precision mediump float;
-varying vec2 v_uv;
-varying vec4 v_color;
+in vec2 v_uv;
+in vec4 v_color;
 uniform sampler2D u_atlas;
 uniform int u_use_texture;
+out vec4 fragColor;
 void main() {
   if (u_use_texture == 1) {
-    float a = texture2D(u_atlas, v_uv).r;
-    gl_FragColor = vec4(v_color.rgb, v_color.a * a);
+    float a = texture(u_atlas, v_uv).r;
+    fragColor = vec4(v_color.rgb, v_color.a * a);
   } else {
-    gl_FragColor = v_color;
+    fragColor = v_color;
   }
 }
 "#;
