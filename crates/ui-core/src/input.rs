@@ -23,7 +23,12 @@ pub struct PointerEvent {
     pub modifiers: Modifiers,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Physical key identifiers matching the Web KeyboardEvent.code specification.
+///
+/// Named variants cover the keys used by the UI framework for shortcuts and
+/// navigation.  Any unrecognised physical key is represented as
+/// `Other(String)` carrying the raw `KeyboardEvent.code` value.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyCode {
     Backspace,
     Delete,
@@ -45,7 +50,36 @@ pub enum KeyCode {
     X,
     Z,
     Y,
-    Other(u32),
+    Other(String),
+}
+
+impl KeyCode {
+    /// Parse a `KeyboardEvent.code` string into a `KeyCode`.
+    pub fn from_code_str(code: &str) -> Self {
+        match code {
+            "Backspace" => KeyCode::Backspace,
+            "Tab" => KeyCode::Tab,
+            "Enter" | "NumpadEnter" => KeyCode::Enter,
+            "Escape" => KeyCode::Escape,
+            "Insert" => KeyCode::Insert,
+            "Delete" => KeyCode::Delete,
+            "ArrowLeft" => KeyCode::ArrowLeft,
+            "ArrowUp" => KeyCode::ArrowUp,
+            "ArrowRight" => KeyCode::ArrowRight,
+            "ArrowDown" => KeyCode::ArrowDown,
+            "Home" => KeyCode::Home,
+            "End" => KeyCode::End,
+            "PageUp" => KeyCode::PageUp,
+            "PageDown" => KeyCode::PageDown,
+            "KeyA" => KeyCode::A,
+            "KeyC" => KeyCode::C,
+            "KeyV" => KeyCode::V,
+            "KeyX" => KeyCode::X,
+            "KeyZ" => KeyCode::Z,
+            "KeyY" => KeyCode::Y,
+            other => KeyCode::Other(other.to_string()),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

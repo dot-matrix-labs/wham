@@ -264,7 +264,7 @@ async function main() {
     if (clipboardAction === "copy" || clipboardAction === "cut") {
       // Forward the key event to Wasm first so it populates the clipboard
       // request (selected text) and, for cut, deletes the selection.
-      app.handle_key_down(e.keyCode, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
+      app.handle_key_down(e.code, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
       // NOTE: After calling into Wasm, any cached typed-array views into
       // wasm.memory.buffer may be detached (memory.grow).  We only read a
       // JS string from take_clipboard_request(), so no view re-acquisition
@@ -295,7 +295,7 @@ async function main() {
       return;
     }
 
-    app.handle_key_down(e.keyCode, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
+    app.handle_key_down(e.code, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
 
     // Prevent browser defaults for keys that widgets handle when focused.
     // We check focus state AFTER forwarding to Wasm because the key event
@@ -305,14 +305,13 @@ async function main() {
         "Tab", "Backspace", "Enter", "Space",
         "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
       ]);
-      // Also prevent Space via its legacy key value " "
       if (PREVENT_KEYS.has(e.key) || PREVENT_KEYS.has(e.code)) {
         e.preventDefault();
       }
     }
   });
   window.addEventListener("keyup", (e) => {
-    app.handle_key_up(e.keyCode, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
+    app.handle_key_up(e.code, e.ctrlKey, e.altKey, e.shiftKey, e.metaKey);
   });
   window.addEventListener("beforeinput", (e) => {
     if (e.data) {

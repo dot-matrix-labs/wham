@@ -363,17 +363,17 @@ impl DemoApp {
         self.events.push(event);
     }
 
-    pub fn handle_key_down(&mut self, code: u32, ctrl: bool, alt: bool, shift: bool, meta: bool) {
+    pub fn handle_key_down(&mut self, code: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) {
         let event = InputEvent::KeyDown {
-            code: map_key(code),
+            code: KeyCode::from_code_str(code),
             modifiers: Modifiers { ctrl, alt, shift, meta },
         };
         self.events.push(event);
     }
 
-    pub fn handle_key_up(&mut self, code: u32, ctrl: bool, alt: bool, shift: bool, meta: bool) {
+    pub fn handle_key_up(&mut self, code: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) {
         let event = InputEvent::KeyUp {
-            code: map_key(code),
+            code: KeyCode::from_code_str(code),
             modifiers: Modifiers { ctrl, alt, shift, meta },
         };
         self.events.push(event);
@@ -433,31 +433,6 @@ fn map_button(button: u16) -> PointerButton {
     }
 }
 
-fn map_key(code: u32) -> KeyCode {
-    match code {
-        8  => KeyCode::Backspace,
-        9  => KeyCode::Tab,
-        13 => KeyCode::Enter,
-        27 => KeyCode::Escape,
-        45 => KeyCode::Insert,
-        46 => KeyCode::Delete,
-        37 => KeyCode::ArrowLeft,
-        38 => KeyCode::ArrowUp,
-        39 => KeyCode::ArrowRight,
-        40 => KeyCode::ArrowDown,
-        36 => KeyCode::Home,
-        35 => KeyCode::End,
-        33 => KeyCode::PageUp,
-        34 => KeyCode::PageDown,
-        65 => KeyCode::A,
-        67 => KeyCode::C,
-        86 => KeyCode::V,
-        88 => KeyCode::X,
-        90 => KeyCode::Z,
-        89 => KeyCode::Y,
-        other => KeyCode::Other(other),
-    }
-}
 
 fn login_schema() -> FormSchema {
     FormSchema {

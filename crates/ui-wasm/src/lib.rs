@@ -67,11 +67,11 @@ impl WasmApp {
         self.demo.handle_wheel(x, y, dx, dy, ctrl, alt, shift, meta);
     }
 
-    pub fn handle_key_down(&mut self, code: u32, ctrl: bool, alt: bool, shift: bool, meta: bool) {
+    pub fn handle_key_down(&mut self, code: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) {
         self.demo.handle_key_down(code, ctrl, alt, shift, meta);
     }
 
-    pub fn handle_key_up(&mut self, code: u32, ctrl: bool, alt: bool, shift: bool, meta: bool) {
+    pub fn handle_key_up(&mut self, code: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) {
         self.demo.handle_key_up(code, ctrl, alt, shift, meta);
     }
 
