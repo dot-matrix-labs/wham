@@ -91,7 +91,7 @@ mod tests {
             self.build_called = true;
             ui.label("Test Form");
             let path = FormPath::root().push("name");
-            if let Some(field) = form.state.fields.get(&path) {
+            if let Some(field) = form.state().fields().get(&path) {
                 if let FieldValue::Text(ref v) = field.value {
                     ui.label(v);
                 }
