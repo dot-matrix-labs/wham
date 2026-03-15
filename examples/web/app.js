@@ -3,6 +3,268 @@ import init, { WasmApp } from "./pkg/ui_wasm.js";
 const canvas = document.getElementById("app");
 const dpr = window.devicePixelRatio || 1;
 
+// ---------------------------------------------------------------------------
+// AccessibilityMirror — hidden DOM tree that mirrors canvas widgets for
+// screen readers.  Elements are visually hidden (sr-only pattern) but remain
+// in the accessibility tree so that NVDA, VoiceOver, TalkBack, etc. can
+// navigate and interact with the GPU-rendered UI.
+// ---------------------------------------------------------------------------
+class AccessibilityMirror {
+  /**
+   * @param {HTMLCanvasElement} canvas  The rendering canvas.
+   * @param {WasmApp}           app     Reference to the Wasm application.
+   * @param {number}            dpr     Device pixel ratio.
+   */
+  constructor(canvas, app, dpr) {
+    this._app = app;
+    this._dpr = dpr;
+    this._nodes = new Map(); // id -> DOM element
+    this._suppressFocusSync = false;
+
+    // Container — positioned over the canvas, transparent to pointer events,
+    // but visible to the accessibility tree.
+    this._container = document.createElement("div");
+    this._container.setAttribute("role", "application");
+    this._container.setAttribute("aria-label", "GPU Forms UI");
+    this._container.setAttribute("aria-hidden", "false");
+    Object.assign(this._container.style, {
+      position: "absolute",
+      top: "0",
+      left: "0",
+      width: "100%",
+      height: "100%",
+      pointerEvents: "none",
+      overflow: "hidden",
+      // Do not affect document layout.
+      contain: "strict",
+    });
+    // Insert immediately after the canvas so the tab order is natural.
+    canvas.parentNode.insertBefore(this._container, canvas.nextSibling);
+
+    // Live region for status announcements (form errors, submission results).
+    this._liveRegion = document.createElement("div");
+    this._liveRegion.setAttribute("aria-live", "polite");
+    this._liveRegion.setAttribute("aria-atomic", "true");
+    Object.assign(this._liveRegion.style, {
+      position: "absolute",
+      width: "1px",
+      height: "1px",
+      overflow: "hidden",
+      clip: "rect(0 0 0 0)",
+      clipPath: "inset(50%)",
+      whiteSpace: "nowrap",
+    });
+    this._container.appendChild(this._liveRegion);
+  }
+
+  /**
+   * Update the mirror to match the latest accessibility tree from Wasm.
+   *
+   * @param {object} a11yTree  Deserialized A11yTree (root: A11yNode).
+   */
+  update(a11yTree) {
+    if (!a11yTree || !a11yTree.root) return;
+    const children = a11yTree.root.children || [];
+    const seenIds = new Set();
+
+    for (const node of children) {
+      seenIds.add(this._idKey(node.id));
+      this._upsertNode(node);
+    }
+
+    // Remove stale nodes that are no longer in the tree.
+    for (const [key, el] of this._nodes) {
+      if (!seenIds.has(key)) {
+        el.remove();
+        this._nodes.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Sync DOM focus to match the Wasm-side focused widget id.
+   * @param {number|null} focusedId  The id of the focused widget (BigInt or Number), or null.
+   */
+  syncFocus(focusedId) {
+    if (focusedId == null) return;
+    const key = this._idKey(focusedId);
+    const el = this._nodes.get(key);
+    if (el && document.activeElement !== el) {
+      this._suppressFocusSync = true;
+      el.focus({ preventScroll: true });
+      this._suppressFocusSync = false;
+    }
+  }
+
+  /**
+   * Announce a message to screen readers via the live region.
+   * @param {string} message
+   */
+  announce(message) {
+    // Clear and re-set so the same message can be announced twice in a row.
+    this._liveRegion.textContent = "";
+    // Use a microtask break so the browser registers the empty → filled change.
+    requestAnimationFrame(() => {
+      this._liveRegion.textContent = message;
+    });
+  }
+
+  // -- private helpers ------------------------------------------------------
+
+  _idKey(id) {
+    // A11y ids may arrive as BigInt from serde_wasm_bindgen; normalise to string.
+    return String(id);
+  }
+
+  _upsertNode(node) {
+    const key = this._idKey(node.id);
+    let el = this._nodes.get(key);
+    const role = node.role;
+
+    if (!el) {
+      el = this._createElement(role);
+      this._attachFocusHandler(el, node.id);
+      this._container.appendChild(el);
+      this._nodes.set(key, el);
+    }
+
+    // Update content & ARIA attributes.
+    this._updateElement(el, node);
+    this._positionElement(el, node.bounds);
+  }
+
+  _createElement(role) {
+    let el;
+    switch (role) {
+      case "TextBox":
+        el = document.createElement("input");
+        el.type = "text";
+        el.setAttribute("role", "textbox");
+        break;
+      case "Button":
+        el = document.createElement("button");
+        break;
+      case "CheckBox":
+        el = document.createElement("input");
+        el.type = "checkbox";
+        el.setAttribute("role", "checkbox");
+        break;
+      case "RadioButton":
+        el = document.createElement("input");
+        el.type = "radio";
+        el.setAttribute("role", "radio");
+        break;
+      case "ComboBox":
+        el = document.createElement("select");
+        el.setAttribute("role", "combobox");
+        break;
+      case "Label":
+        el = document.createElement("span");
+        el.setAttribute("role", "note");
+        break;
+      case "Group":
+        el = document.createElement("fieldset");
+        el.setAttribute("role", "group");
+        break;
+      default:
+        el = document.createElement("span");
+        break;
+    }
+
+    // sr-only styling: visually hidden but accessible.
+    Object.assign(el.style, {
+      position: "absolute",
+      overflow: "hidden",
+      clip: "rect(0 0 0 0)",
+      clipPath: "inset(50%)",
+      width: "1px",
+      height: "1px",
+      whiteSpace: "nowrap",
+      border: "0",
+      padding: "0",
+      margin: "-1px",
+      pointerEvents: "auto", // allow screen reader interaction
+    });
+    el.tabIndex = 0;
+
+    return el;
+  }
+
+  _updateElement(el, node) {
+    el.setAttribute("aria-label", node.name || "");
+    el.setAttribute("data-wham-id", this._idKey(node.id));
+
+    if (node.value != null) {
+      if (el.tagName === "INPUT" && el.type === "text") {
+        el.value = node.value;
+      } else if (el.tagName === "SELECT") {
+        // nothing — options would need to be populated separately
+      } else {
+        el.setAttribute("aria-valuenow", node.value);
+      }
+    }
+
+    const st = node.state || {};
+    if (st.disabled) {
+      el.setAttribute("aria-disabled", "true");
+      el.disabled = true;
+    } else {
+      el.removeAttribute("aria-disabled");
+      el.disabled = false;
+    }
+
+    if (st.invalid) {
+      el.setAttribute("aria-invalid", "true");
+    } else {
+      el.removeAttribute("aria-invalid");
+    }
+
+    if (st.required) {
+      el.setAttribute("aria-required", "true");
+    } else {
+      el.removeAttribute("aria-required");
+    }
+
+    if (node.role === "CheckBox") {
+      el.checked = !!st.selected;
+      el.setAttribute("aria-checked", st.selected ? "true" : "false");
+    }
+
+    if (node.role === "RadioButton") {
+      el.checked = !!st.selected;
+      el.setAttribute("aria-checked", st.selected ? "true" : "false");
+    }
+
+    if (node.role === "ComboBox") {
+      el.setAttribute("aria-expanded", st.expanded ? "true" : "false");
+    }
+  }
+
+  _positionElement(el, bounds) {
+    if (!bounds) return;
+    // bounds are in canvas (physical) pixels — convert to CSS pixels.
+    const x = bounds.x / this._dpr;
+    const y = bounds.y / this._dpr;
+    const w = bounds.w / this._dpr;
+    const h = bounds.h / this._dpr;
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    // Override sr-only 1px sizing with actual widget bounds so screen reader
+    // spatial navigation knows where elements are, but keep clip to hide them.
+    el.style.width = `${Math.max(w, 1)}px`;
+    el.style.height = `${Math.max(h, 1)}px`;
+  }
+
+  _attachFocusHandler(el, nodeId) {
+    el.addEventListener("focus", () => {
+      if (this._suppressFocusSync) return;
+      // Coerce BigInt to Number for the Wasm FFI boundary.
+      const id = typeof nodeId === "bigint" ? Number(nodeId) : nodeId;
+      this._app.set_focus(id);
+    });
+  }
+}
+
 function resize() {
   canvas.width = window.innerWidth * dpr;
   canvas.height = window.innerHeight * dpr;
@@ -80,6 +342,7 @@ async function main() {
   window.__app = app;
 
   const hiddenTextarea = createHiddenTextarea();
+  const a11yMirror = new AccessibilityMirror(canvas, app, dpr);
 
   // --- IME composition state ---
   // Track whether an IME composition session is active so we can suppress
@@ -374,7 +637,25 @@ async function main() {
       return;
     }
     const a11y = app.frame(ts);
+    // NOTE: After calling app.frame() any typed-array views into
+    // wasm.memory.buffer may have been detached by memory.grow.
+    // We only use the JS object `a11y` (not a typed-array view) so no
+    // re-acquisition is needed here.
     window.__a11y = a11y;
+
+    // Update the accessibility shadow DOM mirror.
+    a11yMirror.update(a11y);
+
+    // Sync focus from Wasm to the DOM mirror so screen readers track
+    // the canvas focus state.
+    if (a11y && a11y.root) {
+      const focusedNode = (a11y.root.children || []).find(
+        (n) => n.state && n.state.focused
+      );
+      if (focusedNode) {
+        a11yMirror.syncFocus(focusedNode.id);
+      }
+    }
 
     // Drain any clipboard request that was produced outside a user gesture
     // (e.g. programmatic copy triggered by a button widget).  On Safari this

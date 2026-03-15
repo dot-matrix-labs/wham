@@ -1031,6 +1031,19 @@ impl Ui {
             .map(|w| w.kind)
     }
 
+    /// Set focus to the widget with the given ID.
+    ///
+    /// Used by the accessibility mirror to synchronize screen reader focus
+    /// back into the canvas UI.  If no widget matches the given ID, focus
+    /// is cleared.
+    pub fn set_focus_by_id(&mut self, id: u64) {
+        if self.widgets.iter().any(|w| w.id == id) {
+            self.focused = Some(id);
+        } else {
+            self.focused = None;
+        }
+    }
+
     fn ui_label_inline(&mut self, text: &str) {
         let rect = self.layout.next_rect(22.0 * self.scale);
         self.batch.text_runs.push(TextRun {
