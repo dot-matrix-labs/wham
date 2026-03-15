@@ -637,4 +637,325 @@ mod tests {
         // History depth should be unchanged after set_field_error
         assert_eq!(undo_count_before, undo_count_after);
     }
+
+    // -----------------------------------------------------------------------
+    // FormPath
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn form_path_root_as_string() {
+        assert_eq!(FormPath::root().as_string(), "root");
+    }
+
+    #[test]
+    fn form_path_push_as_string() {
+        let path = FormPath::root().push("a").push("b");
+        assert_eq!(path.as_string(), "a.b");
+    }
+
+    #[test]
+    fn form_path_equality() {
+        let a = FormPath::root().push("x").push("y");
+        let b = FormPath::root().push("x").push("y");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn form_path_inequality() {
+        let a = FormPath::root().push("x");
+        let b = FormPath::root().push("y");
+        assert_ne!(a, b);
+    }
+
+    // -----------------------------------------------------------------------
+    // set_value / get_value roundtrip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_value_roundtrip_text() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("Alice".into()));
+        let field = form.state.fields.get(&path).unwrap();
+        match &field.value {
+            FieldValue::Text(v) => assert_eq!(v, "Alice"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn set_value_marks_dirty_and_touched() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("test".into()));
+        let field = form.state.fields.get(&path).unwrap();
+        assert!(field.dirty);
+        assert!(field.touched);
+    }
+
+    #[test]
+    fn set_value_clears_previous_errors() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        form.set_field_error(&path, "bad");
+        form.set_value(&path, FieldValue::Text("fixed".into()));
+        let field = form.state.fields.get(&path).unwrap();
+        assert!(field.errors.is_empty());
+    }
+
+    #[test]
+    fn set_value_returns_field_changed_event() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        let event = form.set_value(&path, FieldValue::Text("x".into()));
+        match event {
+            FormEvent::FieldChanged(p) => assert_eq!(p, path),
+            _ => panic!("expected FieldChanged"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Validation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validation_required_empty_text_fails() {
+        let schema = FormSchema {
+            fields: vec![FieldSchema {
+                id: "name".into(),
+                label: "Name".into(),
+                field_type: FieldType::Text,
+                rules: vec![ValidationRule::Required],
+            }],
+        };
+        let mut form = Form::new(schema);
+        let result = form.validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validation_required_nonempty_text_passes() {
+        let schema = FormSchema {
+            fields: vec![FieldSchema {
+                id: "name".into(),
+                label: "Name".into(),
+                field_type: FieldType::Text,
+                rules: vec![ValidationRule::Required],
+            }],
+        };
+        let mut form = Form::new(schema);
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("Alice".into()));
+        let result = form.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validation_errors_stored_on_field() {
+        let schema = FormSchema {
+            fields: vec![FieldSchema {
+                id: "name".into(),
+                label: "Name".into(),
+                field_type: FieldType::Text,
+                rules: vec![ValidationRule::Required],
+            }],
+        };
+        let mut form = Form::new(schema);
+        let _ = form.validate();
+        let path = FormPath::root().push("name");
+        let field = form.state.fields.get(&path).unwrap();
+        assert!(!field.errors.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Field errors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_field_error_adds_error() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("email");
+        form.set_field_error(&path, "invalid email");
+        let field = form.state.fields.get(&path).unwrap();
+        assert_eq!(field.errors.len(), 1);
+        assert_eq!(field.errors[0], "invalid email");
+    }
+
+    #[test]
+    fn set_field_error_accumulates() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("email");
+        form.set_field_error(&path, "error 1");
+        form.set_field_error(&path, "error 2");
+        let field = form.state.fields.get(&path).unwrap();
+        assert_eq!(field.errors.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Submission
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn start_submit_fails_validation() {
+        let schema = FormSchema {
+            fields: vec![FieldSchema {
+                id: "name".into(),
+                label: "Name".into(),
+                field_type: FieldType::Text,
+                rules: vec![ValidationRule::Required],
+            }],
+        };
+        let mut form = Form::new(schema);
+        let result = form.start_submit(serde_json::json!({}), 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn start_submit_sets_pending_flag() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("test".into()));
+        let result = form.start_submit(serde_json::json!({}), 0);
+        assert!(result.is_ok());
+        // All fields should be marked pending
+        for (_p, field) in form.state.fields.iter() {
+            assert!(field.pending);
+        }
+    }
+
+    #[test]
+    fn apply_success_clears_pending_and_dirty() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("test".into()));
+        let id = match form.start_submit(serde_json::json!({}), 0).unwrap() {
+            FormEvent::SubmissionStarted(id) => id,
+            _ => panic!("expected SubmissionStarted"),
+        };
+        form.apply_success(id);
+        assert!(form.pending.is_none());
+        for (_p, field) in form.state.fields.iter() {
+            assert!(!field.pending);
+            assert!(!field.dirty);
+        }
+    }
+
+    #[test]
+    fn apply_error_with_rollback_restores_snapshot() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("before".into()));
+        let id = match form.start_submit(serde_json::json!({}), 0).unwrap() {
+            FormEvent::SubmissionStarted(id) => id,
+            _ => panic!("expected SubmissionStarted"),
+        };
+        form.set_value(&path, FieldValue::Text("after".into()));
+        let event = form.apply_error(id, "fail", true);
+        match event {
+            FormEvent::RolledBack(_) => {}
+            _ => panic!("expected RolledBack"),
+        }
+        // State should be rolled back to the pre-submit snapshot
+        let field = form.state.fields.get(&path).unwrap();
+        match &field.value {
+            FieldValue::Text(v) => assert_eq!(v, "before"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn retry_pending_decrements_retries() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("test".into()));
+        form.start_submit(serde_json::json!({}), 3).unwrap();
+        assert!(form.retry_pending().is_some());
+        assert!(form.retry_pending().is_some());
+        assert!(form.retry_pending().is_some());
+        assert!(form.retry_pending().is_none()); // exhausted
+    }
+
+    // -----------------------------------------------------------------------
+    // Form initial state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn new_form_creates_default_fields() {
+        let schema = FormSchema {
+            fields: vec![
+                FieldSchema {
+                    id: "name".into(),
+                    label: "Name".into(),
+                    field_type: FieldType::Text,
+                    rules: vec![],
+                },
+                FieldSchema {
+                    id: "age".into(),
+                    label: "Age".into(),
+                    field_type: FieldType::Number,
+                    rules: vec![],
+                },
+                FieldSchema {
+                    id: "agree".into(),
+                    label: "Agree".into(),
+                    field_type: FieldType::Checkbox,
+                    rules: vec![],
+                },
+            ],
+        };
+        let form = Form::new(schema);
+        assert_eq!(form.state.fields.len(), 3);
+        let name_path = FormPath::root().push("name");
+        match &form.state.fields.get(&name_path).unwrap().value {
+            FieldValue::Text(v) => assert_eq!(v, ""),
+            _ => panic!("expected Text"),
+        }
+        let age_path = FormPath::root().push("age");
+        match &form.state.fields.get(&age_path).unwrap().value {
+            FieldValue::Number(v) => assert_eq!(*v, 0.0),
+            _ => panic!("expected Number"),
+        }
+    }
+
+    #[test]
+    fn new_form_no_history() {
+        let form = Form::new(simple_schema());
+        assert!(!form.history.can_undo());
+        assert!(!form.history.can_redo());
+    }
+
+    // -----------------------------------------------------------------------
+    // History integration
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn multiple_set_values_create_history() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("a".into()));
+        form.set_value(&path, FieldValue::Text("b".into()));
+        form.set_value(&path, FieldValue::Text("c".into()));
+        // Should be able to undo 3 times
+        assert!(form.history.can_undo());
+        let prev = form.history.undo().unwrap();
+        match &prev.fields.get(&path).unwrap().value {
+            FieldValue::Text(v) => assert_eq!(v, "b"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn history_redo_after_undo() {
+        let mut form = Form::new(simple_schema());
+        let path = FormPath::root().push("name");
+        form.set_value(&path, FieldValue::Text("first".into()));
+        form.set_value(&path, FieldValue::Text("second".into()));
+        form.history.undo(); // back to "first"
+        assert!(form.history.can_redo());
+        let next = form.history.redo().unwrap();
+        match &next.fields.get(&path).unwrap().value {
+            FieldValue::Text(v) => assert_eq!(v, "second"),
+            _ => panic!("expected Text"),
+        }
+    }
 }

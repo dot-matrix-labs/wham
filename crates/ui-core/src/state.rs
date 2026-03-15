@@ -141,5 +141,95 @@ mod tests {
         h.redo();
         assert_eq!(*h.present(), (MAX_HISTORY_ENTRIES + 4) as u32);
     }
+
+    #[test]
+    fn new_history_present_is_initial() {
+        let h = History::new(42u32);
+        assert_eq!(*h.present(), 42);
+        assert!(!h.can_undo());
+        assert!(!h.can_redo());
+    }
+
+    #[test]
+    fn push_clears_future() {
+        let mut h = History::new(0u32);
+        h.push(1);
+        h.push(2);
+        h.undo(); // present=1, future=[2]
+        assert!(h.can_redo());
+        h.push(3); // should clear future
+        assert!(!h.can_redo());
+        assert_eq!(*h.present(), 3);
+    }
+
+    #[test]
+    fn undo_returns_previous_state() {
+        let mut h = History::new("a".to_string());
+        h.push("b".to_string());
+        let prev = h.undo().unwrap();
+        assert_eq!(*prev, "a");
+        assert_eq!(*h.present(), "a");
+    }
+
+    #[test]
+    fn redo_returns_next_state() {
+        let mut h = History::new("a".to_string());
+        h.push("b".to_string());
+        h.undo();
+        let next = h.redo().unwrap();
+        assert_eq!(*next, "b");
+        assert_eq!(*h.present(), "b");
+    }
+
+    #[test]
+    fn undo_on_empty_returns_none() {
+        let mut h = History::new(0u32);
+        assert!(h.undo().is_none());
+    }
+
+    #[test]
+    fn redo_on_empty_returns_none() {
+        let mut h = History::new(0u32);
+        assert!(h.redo().is_none());
+    }
+
+    #[test]
+    fn max_entries_constant() {
+        assert_eq!(History::<u32>::max_entries(), 100);
+    }
+
+    #[test]
+    fn past_len_tracks_correctly() {
+        let mut h = History::new(0u32);
+        assert_eq!(h.past_len(), 0);
+        h.push(1);
+        assert_eq!(h.past_len(), 1);
+        h.push(2);
+        assert_eq!(h.past_len(), 2);
+        h.undo();
+        assert_eq!(h.past_len(), 1);
+    }
+
+    #[test]
+    fn undo_redo_full_cycle() {
+        let mut h = History::new(0u32);
+        h.push(1);
+        h.push(2);
+        h.push(3);
+
+        // Undo all
+        h.undo();
+        h.undo();
+        h.undo();
+        assert_eq!(*h.present(), 0);
+
+        // Redo all
+        h.redo();
+        assert_eq!(*h.present(), 1);
+        h.redo();
+        assert_eq!(*h.present(), 2);
+        h.redo();
+        assert_eq!(*h.present(), 3);
+    }
 }
 

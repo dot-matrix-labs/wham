@@ -1026,3 +1026,205 @@ impl Ui {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::Modifiers;
+    use crate::theme::Theme;
+
+    fn test_ui() -> Ui {
+        Ui::new(800.0, 600.0, Theme::default_light())
+    }
+
+    // -----------------------------------------------------------------------
+    // ID stack
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hash_id_same_label_same_id() {
+        let ui = test_ui();
+        let id1 = ui.hash_id("my_button");
+        let id2 = ui.hash_id("my_button");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn hash_id_different_labels_different_ids() {
+        let ui = test_ui();
+        let id1 = ui.hash_id("button_a");
+        let id2 = ui.hash_id("button_b");
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn push_id_changes_hash() {
+        let mut ui = test_ui();
+        let id_before = ui.hash_id("label");
+        ui.push_id(0u32);
+        let id_with_stack = ui.hash_id("label");
+        ui.pop_id();
+        assert_ne!(id_before, id_with_stack);
+    }
+
+    #[test]
+    fn pop_id_restores_original_hash() {
+        let mut ui = test_ui();
+        let id_before = ui.hash_id("label");
+        ui.push_id(42u32);
+        ui.pop_id();
+        let id_after = ui.hash_id("label");
+        assert_eq!(id_before, id_after);
+    }
+
+    #[test]
+    fn different_stack_values_produce_different_ids() {
+        let mut ui = test_ui();
+        ui.push_id(0u32);
+        let id0 = ui.hash_id("item");
+        ui.pop_id();
+
+        ui.push_id(1u32);
+        let id1 = ui.hash_id("item");
+        ui.pop_id();
+
+        assert_ne!(id0, id1);
+    }
+
+    #[test]
+    fn nested_push_id() {
+        let mut ui = test_ui();
+        ui.push_id("group_a");
+        ui.push_id(0u32);
+        let id_a0 = ui.hash_id("field");
+        ui.pop_id();
+        ui.push_id(1u32);
+        let id_a1 = ui.hash_id("field");
+        ui.pop_id();
+        ui.pop_id();
+
+        assert_ne!(id_a0, id_a1);
+    }
+
+    #[test]
+    fn same_path_same_id_across_frames() {
+        let mut ui = test_ui();
+        ui.push_id(5u32);
+        let id_frame1 = ui.hash_id("widget");
+        ui.pop_id();
+
+        // Simulate a new frame
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.push_id(5u32);
+        let id_frame2 = ui.hash_id("widget");
+        ui.pop_id();
+
+        assert_eq!(id_frame1, id_frame2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Focus management (Tab / Shift+Tab)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn tab_advances_focus() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.label("Label 1");
+        ui.label("Label 2");
+        ui.label("Label 3");
+        // No focus initially
+        assert!(ui.focused.is_none());
+
+        // Simulate Tab press
+        let tab_event = InputEvent::KeyDown {
+            code: KeyCode::Tab,
+            modifiers: Modifiers { shift: false, ctrl: false, alt: false, meta: false },
+        };
+        ui.events = vec![tab_event];
+        ui.end_frame();
+
+        // Focus should now be on one of the widgets
+        assert!(ui.focused.is_some());
+    }
+
+    #[test]
+    fn shift_tab_reverses_focus() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.label("A");
+        ui.label("B");
+        ui.label("C");
+
+        // Set focus to second widget
+        let second_id = ui.widgets[1].id;
+        ui.focused = Some(second_id);
+
+        // Simulate Shift+Tab
+        let shift_tab = InputEvent::KeyDown {
+            code: KeyCode::Tab,
+            modifiers: Modifiers { shift: true, ctrl: false, alt: false, meta: false },
+        };
+        ui.events = vec![shift_tab];
+        ui.end_frame();
+
+        // Focus should move to first widget
+        assert_eq!(ui.focused, Some(ui.widgets[0].id));
+    }
+
+    #[test]
+    fn tab_wraps_around() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.label("A");
+        ui.label("B");
+
+        // Set focus to last widget
+        let last_id = ui.widgets[1].id;
+        ui.focused = Some(last_id);
+
+        let tab_event = InputEvent::KeyDown {
+            code: KeyCode::Tab,
+            modifiers: Modifiers { shift: false, ctrl: false, alt: false, meta: false },
+        };
+        ui.events = vec![tab_event];
+        ui.end_frame();
+
+        // Focus should wrap to first widget
+        assert_eq!(ui.focused, Some(ui.widgets[0].id));
+    }
+
+    // -----------------------------------------------------------------------
+    // Layout
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn layout_next_rect_advances_cursor() {
+        let mut layout = Layout::new(10.0, 10.0, 200.0);
+        let r1 = layout.next_rect(30.0);
+        let r2 = layout.next_rect(30.0);
+        assert_eq!(r1.x, 10.0);
+        assert_eq!(r1.y, 10.0);
+        assert_eq!(r1.w, 200.0);
+        assert_eq!(r1.h, 30.0);
+        // r2 should be below r1 + spacing (default 10.0)
+        assert_eq!(r2.y, 50.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // begin_frame clears per-frame state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn begin_frame_clears_widgets_and_batch() {
+        let mut ui = test_ui();
+        ui.label("test");
+        assert!(!ui.widgets.is_empty());
+        assert!(!ui.batch.text_runs.is_empty());
+
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        assert!(ui.widgets.is_empty());
+        assert!(ui.batch.text_runs.is_empty());
+        assert!(ui.batch.vertices.is_empty());
+    }
+}

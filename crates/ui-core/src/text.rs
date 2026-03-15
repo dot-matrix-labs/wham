@@ -545,3 +545,668 @@ impl TextEditOp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Basic construction
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn new_empty_buffer() {
+        let buf = TextBuffer::new("");
+        assert_eq!(buf.text(), "");
+        assert_eq!(buf.caret().index, 0);
+        assert!(buf.selection().is_none());
+        assert!(buf.composition().is_none());
+    }
+
+    #[test]
+    fn new_buffer_caret_at_end() {
+        let buf = TextBuffer::new("hello");
+        assert_eq!(buf.caret().index, 5);
+    }
+
+    #[test]
+    fn new_buffer_with_multibyte() {
+        // e-acute is 2 bytes but 1 grapheme
+        let buf = TextBuffer::new("caf\u{00e9}");
+        assert_eq!(buf.grapheme_len(), 4);
+        assert_eq!(buf.caret().index, 4);
+    }
+
+    #[test]
+    fn new_buffer_with_emoji() {
+        // Family emoji is a single grapheme cluster
+        let buf = TextBuffer::new("a\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}b");
+        assert_eq!(buf.grapheme_len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Insert
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn insert_at_end() {
+        let mut buf = TextBuffer::new("hello");
+        buf.insert_text(" world");
+        assert_eq!(buf.text(), "hello world");
+        assert_eq!(buf.caret().index, 11);
+    }
+
+    #[test]
+    fn insert_at_beginning() {
+        let mut buf = TextBuffer::new("world");
+        buf.set_caret(0);
+        buf.insert_text("hello ");
+        assert_eq!(buf.text(), "hello world");
+        assert_eq!(buf.caret().index, 6);
+    }
+
+    #[test]
+    fn insert_in_middle() {
+        let mut buf = TextBuffer::new("helo");
+        buf.set_caret(2);
+        buf.insert_text("l");
+        assert_eq!(buf.text(), "hello");
+        assert_eq!(buf.caret().index, 3);
+    }
+
+    #[test]
+    fn insert_empty_string() {
+        let mut buf = TextBuffer::new("abc");
+        buf.insert_text("");
+        assert_eq!(buf.text(), "abc");
+    }
+
+    #[test]
+    fn insert_replaces_selection() {
+        let mut buf = TextBuffer::new("hello world");
+        buf.set_selection(0, 5);
+        buf.insert_text("goodbye");
+        assert_eq!(buf.text(), "goodbye world");
+    }
+
+    // -----------------------------------------------------------------------
+    // Delete backward
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn delete_backward_basic() {
+        let mut buf = TextBuffer::new("abc");
+        buf.delete_backward();
+        assert_eq!(buf.text(), "ab");
+        assert_eq!(buf.caret().index, 2);
+    }
+
+    #[test]
+    fn delete_backward_at_start() {
+        let mut buf = TextBuffer::new("abc");
+        buf.set_caret(0);
+        let op = buf.delete_backward();
+        assert!(op.is_none());
+        assert_eq!(buf.text(), "abc");
+    }
+
+    #[test]
+    fn delete_backward_empty_buffer() {
+        let mut buf = TextBuffer::new("");
+        let op = buf.delete_backward();
+        assert!(op.is_none());
+        assert_eq!(buf.text(), "");
+    }
+
+    #[test]
+    fn delete_backward_with_selection_deletes_selection() {
+        let mut buf = TextBuffer::new("hello world");
+        buf.set_selection(5, 11);
+        buf.delete_backward();
+        assert_eq!(buf.text(), "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // Delete forward
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn delete_forward_basic() {
+        let mut buf = TextBuffer::new("abc");
+        buf.set_caret(0);
+        buf.delete_forward();
+        assert_eq!(buf.text(), "bc");
+        assert_eq!(buf.caret().index, 0);
+    }
+
+    #[test]
+    fn delete_forward_at_end() {
+        let mut buf = TextBuffer::new("abc");
+        let op = buf.delete_forward();
+        assert!(op.is_none());
+        assert_eq!(buf.text(), "abc");
+    }
+
+    // -----------------------------------------------------------------------
+    // Cursor movement
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_left() {
+        let mut buf = TextBuffer::new("abc");
+        buf.move_left(false);
+        assert_eq!(buf.caret().index, 2);
+        assert!(buf.selection().is_none());
+    }
+
+    #[test]
+    fn move_left_at_start() {
+        let mut buf = TextBuffer::new("abc");
+        buf.set_caret(0);
+        buf.move_left(false);
+        assert_eq!(buf.caret().index, 0);
+    }
+
+    #[test]
+    fn move_right() {
+        let mut buf = TextBuffer::new("abc");
+        buf.set_caret(0);
+        buf.move_right(false);
+        assert_eq!(buf.caret().index, 1);
+    }
+
+    #[test]
+    fn move_right_at_end() {
+        let mut buf = TextBuffer::new("abc");
+        buf.move_right(false);
+        assert_eq!(buf.caret().index, 3);
+    }
+
+    #[test]
+    fn move_left_with_selection_extends() {
+        let mut buf = TextBuffer::new("abcdef");
+        buf.set_caret(3);
+        buf.move_left(true);
+        let sel = buf.selection().unwrap();
+        assert_eq!(sel.start, 3);
+        assert_eq!(sel.end, 2);
+    }
+
+    #[test]
+    fn move_right_with_selection_extends() {
+        let mut buf = TextBuffer::new("abcdef");
+        buf.set_caret(3);
+        buf.move_right(true);
+        let sel = buf.selection().unwrap();
+        assert_eq!(sel.start, 3);
+        assert_eq!(sel.end, 4);
+    }
+
+    // -----------------------------------------------------------------------
+    // Home / End (line start/end)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_to_line_start_single_line() {
+        let mut buf = TextBuffer::new("hello");
+        buf.move_to_line_start(false);
+        assert_eq!(buf.caret().index, 0);
+    }
+
+    #[test]
+    fn move_to_line_end_single_line() {
+        let mut buf = TextBuffer::new("hello");
+        buf.set_caret(0);
+        buf.move_to_line_end(false);
+        assert_eq!(buf.caret().index, 5);
+    }
+
+    #[test]
+    fn move_to_line_start_multiline() {
+        let mut buf = TextBuffer::new("abc\ndef\nghi");
+        // Caret is at end = grapheme 11. Line start of "ghi" is grapheme 8.
+        buf.move_to_line_start(false);
+        assert_eq!(buf.caret().index, 8);
+    }
+
+    #[test]
+    fn move_to_line_end_multiline() {
+        let mut buf = TextBuffer::new("abc\ndef\nghi");
+        buf.set_caret(4); // 'd' in "def"
+        buf.move_to_line_end(false);
+        assert_eq!(buf.caret().index, 7); // just before '\n' after "def"
+    }
+
+    // -----------------------------------------------------------------------
+    // Word movement
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_word_right_basic() {
+        let mut buf = TextBuffer::new("hello world");
+        buf.set_caret(0);
+        buf.move_word_right(false);
+        // Should jump past "hello" and the space
+        assert!(buf.caret().index >= 5);
+    }
+
+    #[test]
+    fn move_word_left_basic() {
+        let mut buf = TextBuffer::new("hello world");
+        // caret at end (11)
+        buf.move_word_left(false);
+        // Should jump to start of "world" (6)
+        assert!(buf.caret().index <= 6);
+    }
+
+    // -----------------------------------------------------------------------
+    // Select all
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn select_all() {
+        let mut buf = TextBuffer::new("hello");
+        buf.select_all();
+        let sel = buf.selection().unwrap();
+        assert_eq!(sel.start, 0);
+        assert_eq!(sel.end, 5);
+        assert_eq!(buf.caret().index, 5);
+    }
+
+    #[test]
+    fn select_all_empty() {
+        let mut buf = TextBuffer::new("");
+        buf.select_all();
+        let sel = buf.selection().unwrap();
+        assert_eq!(sel.start, 0);
+        assert_eq!(sel.end, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Selected text / cut
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn selected_text_returns_substring() {
+        let mut buf = TextBuffer::new("hello world");
+        buf.set_selection(6, 11);
+        assert_eq!(buf.selected_text().unwrap(), "world");
+    }
+
+    #[test]
+    fn selected_text_none_without_selection() {
+        let buf = TextBuffer::new("hello");
+        assert!(buf.selected_text().is_none());
+    }
+
+    #[test]
+    fn cut_selection_removes_text() {
+        let mut buf = TextBuffer::new("hello world");
+        buf.set_selection(5, 11);
+        let cut = buf.cut_selection().unwrap();
+        assert_eq!(cut, " world");
+        assert_eq!(buf.text(), "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // set_text resets everything
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_text_resets_state() {
+        let mut buf = TextBuffer::new("old");
+        buf.insert_text("x"); // creates undo entry
+        buf.set_text("brand new");
+        assert_eq!(buf.text(), "brand new");
+        assert_eq!(buf.caret().index, 9);
+        assert!(buf.selection().is_none());
+        // undo stack should be cleared
+        assert!(!buf.undo());
+    }
+
+    // -----------------------------------------------------------------------
+    // Undo / Redo
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn undo_reverses_insert() {
+        let mut buf = TextBuffer::new("");
+        buf.insert_text("hello");
+        assert_eq!(buf.text(), "hello");
+        buf.undo();
+        assert_eq!(buf.text(), "");
+    }
+
+    #[test]
+    fn redo_restores_insert() {
+        let mut buf = TextBuffer::new("");
+        buf.insert_text("hello");
+        buf.undo();
+        buf.redo();
+        assert_eq!(buf.text(), "hello");
+    }
+
+    #[test]
+    fn undo_reverses_delete() {
+        let mut buf = TextBuffer::new("hello");
+        buf.delete_backward();
+        assert_eq!(buf.text(), "hell");
+        buf.undo();
+        assert_eq!(buf.text(), "hello");
+    }
+
+    #[test]
+    fn new_edit_clears_redo_stack() {
+        let mut buf = TextBuffer::new("");
+        buf.insert_text("a");
+        buf.insert_text("b");
+        buf.undo(); // undo "b"
+        assert!(buf.redo()); // can redo
+        buf.undo(); // undo "b" again
+        buf.insert_text("c"); // new edit should clear redo
+        assert!(!buf.redo()); // redo no longer available
+        assert_eq!(buf.text(), "ac");
+    }
+
+    #[test]
+    fn multiple_undo_redo() {
+        let mut buf = TextBuffer::new("");
+        buf.insert_text("a");
+        buf.insert_text("b");
+        buf.insert_text("c");
+        assert_eq!(buf.text(), "abc");
+
+        buf.undo();
+        assert_eq!(buf.text(), "ab");
+        buf.undo();
+        assert_eq!(buf.text(), "a");
+        buf.undo();
+        assert_eq!(buf.text(), "");
+        // Can't undo further
+        assert!(!buf.undo());
+
+        buf.redo();
+        assert_eq!(buf.text(), "a");
+        buf.redo();
+        assert_eq!(buf.text(), "ab");
+        buf.redo();
+        assert_eq!(buf.text(), "abc");
+        assert!(!buf.redo());
+    }
+
+    #[test]
+    fn undo_on_empty_returns_false() {
+        let mut buf = TextBuffer::new("hello");
+        assert!(!buf.undo());
+    }
+
+    #[test]
+    fn redo_on_empty_returns_false() {
+        let mut buf = TextBuffer::new("hello");
+        assert!(!buf.redo());
+    }
+
+    // -----------------------------------------------------------------------
+    // IME composition
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn composition_basic_flow() {
+        let mut buf = TextBuffer::new("hello ");
+        buf.begin_composition();
+        assert!(buf.composition().is_some());
+
+        buf.update_composition("ni");
+        assert_eq!(buf.text(), "hello ni");
+
+        buf.update_composition("nihao");
+        assert_eq!(buf.text(), "hello nihao");
+
+        buf.end_composition("\u{4f60}\u{597d}");
+        assert_eq!(buf.text(), "hello \u{4f60}\u{597d}");
+        assert!(buf.composition().is_none());
+    }
+
+    #[test]
+    fn composition_replaces_previous_update() {
+        let mut buf = TextBuffer::new("");
+        buf.begin_composition();
+        buf.update_composition("ab");
+        assert_eq!(buf.text(), "ab");
+        buf.update_composition("abc");
+        assert_eq!(buf.text(), "abc");
+        buf.end_composition("final");
+        assert_eq!(buf.text(), "final");
+    }
+
+    // -----------------------------------------------------------------------
+    // Word / line selection (double/triple click helpers)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn select_word_at_middle() {
+        let mut buf = TextBuffer::new("hello world");
+        buf.select_word_at(7); // inside "world"
+        let sel = buf.selection().unwrap().normalized();
+        assert!(sel.start <= 6);
+        assert!(sel.end >= 11);
+    }
+
+    #[test]
+    fn select_line_at_first_line() {
+        let mut buf = TextBuffer::new("first\nsecond");
+        buf.select_line_at(2); // inside "first"
+        let sel = buf.selection().unwrap().normalized();
+        assert_eq!(sel.start, 0);
+        assert_eq!(sel.end, 5); // before the '\n'
+    }
+
+    #[test]
+    fn select_line_at_second_line() {
+        let mut buf = TextBuffer::new("first\nsecond");
+        buf.select_line_at(8); // inside "second"
+        let sel = buf.selection().unwrap().normalized();
+        assert_eq!(sel.start, 6);
+        assert_eq!(sel.end, 12);
+    }
+
+    // -----------------------------------------------------------------------
+    // Selection normalization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn selection_normalized_already_ordered() {
+        let sel = Selection { start: 2, end: 5 };
+        let n = sel.normalized();
+        assert_eq!(n.start, 2);
+        assert_eq!(n.end, 5);
+    }
+
+    #[test]
+    fn selection_normalized_reversed() {
+        let sel = Selection { start: 5, end: 2 };
+        let n = sel.normalized();
+        assert_eq!(n.start, 2);
+        assert_eq!(n.end, 5);
+    }
+
+    #[test]
+    fn selection_is_empty() {
+        assert!(Selection { start: 3, end: 3 }.is_empty());
+        assert!(!Selection { start: 3, end: 5 }.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // TextEditOp::invert
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn invert_insert_produces_delete() {
+        let op = TextEditOp::Insert { at: 0, text: "hi".into() };
+        match op.invert() {
+            TextEditOp::Delete { start, end, text } => {
+                assert_eq!(start, 0);
+                assert_eq!(end, 2);
+                assert_eq!(text, "hi");
+            }
+            _ => panic!("expected Delete"),
+        }
+    }
+
+    #[test]
+    fn invert_delete_produces_insert() {
+        let op = TextEditOp::Delete { start: 1, end: 3, text: "ab".into() };
+        match op.invert() {
+            TextEditOp::Insert { at, text } => {
+                assert_eq!(at, 1);
+                assert_eq!(text, "ab");
+            }
+            _ => panic!("expected Insert"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge cases: caret clamping
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_caret_clamps_to_len() {
+        let mut buf = TextBuffer::new("abc");
+        buf.set_caret(100);
+        assert_eq!(buf.caret().index, 3);
+    }
+
+    #[test]
+    fn set_selection_clamps() {
+        let mut buf = TextBuffer::new("abc");
+        buf.set_selection(50, 100);
+        let sel = buf.selection().unwrap();
+        assert_eq!(sel.start, 3);
+        assert_eq!(sel.end, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Delete word backward / forward
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn delete_word_backward_basic() {
+        let mut buf = TextBuffer::new("hello world");
+        buf.delete_word_backward();
+        // Should delete "world" (and possibly trailing space)
+        assert!(buf.text().len() < 11);
+        assert!(buf.text().starts_with("hello"));
+    }
+
+    #[test]
+    fn delete_word_forward_basic() {
+        let mut buf = TextBuffer::new("hello world");
+        buf.set_caret(0);
+        buf.delete_word_forward();
+        // Should delete "hello" (and possibly leading space)
+        assert!(buf.text().len() < 11);
+        assert!(buf.text().contains("world"));
+    }
+
+    #[test]
+    fn delete_word_backward_at_start() {
+        let mut buf = TextBuffer::new("hello");
+        buf.set_caret(0);
+        let op = buf.delete_word_backward();
+        assert!(op.is_none());
+    }
+
+    #[test]
+    fn delete_word_forward_at_end() {
+        let mut buf = TextBuffer::new("hello");
+        let op = buf.delete_word_forward();
+        assert!(op.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Property-based tests
+    // -----------------------------------------------------------------------
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn insert_delete_roundtrip(s in "[a-z]{0,20}") {
+                let mut buf = TextBuffer::new("");
+                buf.insert_text(&s);
+                assert_eq!(buf.text(), s);
+                // Delete all characters one by one
+                for _ in 0..buf.grapheme_len() {
+                    buf.delete_backward();
+                }
+                assert_eq!(buf.text(), "");
+            }
+
+            #[test]
+            fn arbitrary_ops_never_panic(
+                initial in "[a-z]{0,10}",
+                ops in proptest::collection::vec(
+                    prop_oneof![
+                        Just(0u8), // insert "x"
+                        Just(1),   // delete_backward
+                        Just(2),   // delete_forward
+                        Just(3),   // move_left
+                        Just(4),   // move_right
+                        Just(5),   // undo
+                        Just(6),   // redo
+                        Just(7),   // select_all
+                    ],
+                    0..50
+                )
+            ) {
+                let mut buf = TextBuffer::new(&initial);
+                for op in ops {
+                    match op {
+                        0 => { buf.insert_text("x"); }
+                        1 => { buf.delete_backward(); }
+                        2 => { buf.delete_forward(); }
+                        3 => { buf.move_left(false); }
+                        4 => { buf.move_right(false); }
+                        5 => { buf.undo(); }
+                        6 => { buf.redo(); }
+                        7 => { buf.select_all(); }
+                        _ => unreachable!(),
+                    }
+                    // Invariant: caret is always valid
+                    assert!(buf.caret().index <= buf.grapheme_len(),
+                        "caret {} > len {} after op {}",
+                        buf.caret().index, buf.grapheme_len(), op);
+                }
+            }
+
+            #[test]
+            fn undo_reverses_last_insert(s in "[a-z]{1,10}") {
+                let mut buf = TextBuffer::new("");
+                buf.insert_text(&s);
+                assert_eq!(buf.text(), s);
+                buf.undo();
+                assert_eq!(buf.text(), "");
+            }
+
+            #[test]
+            fn caret_always_valid_after_movements(
+                text in "[a-z ]{0,20}",
+                moves in proptest::collection::vec(0..4u8, 0..30)
+            ) {
+                let mut buf = TextBuffer::new(&text);
+                for m in moves {
+                    match m {
+                        0 => buf.move_left(false),
+                        1 => buf.move_right(false),
+                        2 => buf.move_to_line_start(false),
+                        3 => buf.move_to_line_end(false),
+                        _ => unreachable!(),
+                    }
+                    assert!(buf.caret().index <= buf.grapheme_len());
+                }
+            }
+        }
+    }
+}
