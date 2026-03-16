@@ -242,3 +242,25 @@ fn notification_save_button_emits_primary_colored_quad() {
         "at least one vertex must use the primary blue color (button or focus ring)"
     );
 }
+
+#[test]
+fn notification_settings_screenshot() {
+    use std::cell::RefCell;
+    use wham_test::{save_screenshot, Size};
+
+    let email_on = RefCell::new(true);
+    let push_on  = RefCell::new(false);
+    let sms_on   = RefCell::new(false);
+    let theme    = RefCell::new(0usize);
+
+    save_screenshot("notification_settings", Size { width: 480, height: 720 }, |ui| {
+        ui.set_icon_pack(notification_icon_pack());
+        notification_settings_view(
+            ui,
+            &mut email_on.borrow_mut(),
+            &mut push_on.borrow_mut(),
+            &mut sms_on.borrow_mut(),
+            &mut theme.borrow_mut(),
+        );
+    });
+}

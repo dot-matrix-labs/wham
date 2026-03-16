@@ -129,3 +129,18 @@ fn sign_in_typing_email_syncs_to_form() {
         other => panic!("expected FieldValue::Text, got {:?}", other),
     }
 }
+
+#[test]
+fn sign_in_screenshot() {
+    use std::cell::RefCell;
+    use ui_core::form::FieldValue;
+    use wham_test::{save_screenshot, Size};
+
+    let mut form = Form::new(schema());
+    form.set_value(&FormPath::root().push("email"), FieldValue::Text("alice@example.com".into()));
+
+    let form = RefCell::new(form);
+    save_screenshot("sign_in", Size { width: 480, height: 640 }, |ui| {
+        render(ui, &mut form.borrow_mut());
+    });
+}

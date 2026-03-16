@@ -82,3 +82,39 @@ jobs:
 
       - name: Run clippy on ui-core
         run: cargo clippy -p ui-core --all-features -- -D warnings
+
+  # ── 4. Headless scenario tests + screenshot artifacts ───────────────────────
+  screenshots:
+    name: headless form screenshots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-screenshots-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-screenshots-
+
+      - name: Run wham-test suite
+        run: cargo test -p wham-test
+
+      - name: Render scenario screenshots
+        run: |
+          mkdir -p tests/screenshots
+          WHAM_SCREENSHOT_DIR=tests/screenshots cargo test -p wham-test screenshot -- --nocapture
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: form-screenshots-${{ github.sha }}
+          path: tests/screenshots/
+          retention-days: 30

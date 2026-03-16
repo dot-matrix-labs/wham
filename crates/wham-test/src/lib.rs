@@ -173,6 +173,21 @@ impl VisualTest {
 // Public render helper
 // ---------------------------------------------------------------------------
 
+/// Render `build` and write the output to `{WHAM_SCREENSHOT_DIR}/{name}.png`.
+///
+/// Does nothing if the `WHAM_SCREENSHOT_DIR` environment variable is not set,
+/// making it safe to call from any test without side effects in normal runs.
+pub fn save_screenshot(name: &str, size: Size, build: impl Fn(&mut Ui)) {
+    let dir = match std::env::var("WHAM_SCREENSHOT_DIR") {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let pixels = render_to_pixels(size, build);
+    let path = std::path::PathBuf::from(&dir).join(format!("{}.png", name));
+    write_png(&path, size, &pixels)
+        .unwrap_or_else(|e| eprintln!("wham-test: screenshot failed for '{name}': {e}"));
+}
+
 /// Render a widget tree to a raw RGBA pixel buffer without performing any
 /// comparison.  Useful for generating reference snapshots programmatically.
 pub fn render_to_pixels(size: Size, build: impl Fn(&mut Ui)) -> Vec<u8> {
