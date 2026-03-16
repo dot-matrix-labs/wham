@@ -11,6 +11,7 @@ fn optimistic_submit_and_rollback() {
             field_type: FieldType::Text,
             rules: vec![ValidationRule::Required],
             placeholder: None,
+            autocomplete: None,
         }],
     };
     let mut form = Form::new(schema);

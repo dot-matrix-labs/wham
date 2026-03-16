@@ -214,4 +214,37 @@ impl WasmApp {
             None => JsValue::NULL,
         }
     }
+
+    // -----------------------------------------------------------------
+    // Autofill / password-manager bridge
+    // -----------------------------------------------------------------
+
+    /// Return the current text value of the form field at `field_id` (a
+    /// dot-separated path string such as `"email"` or `"profile.name"`).
+    ///
+    /// Returns an empty string when the path does not exist or when the field
+    /// is not a text field.
+    pub fn get_field_value(&self, field_id: &str) -> String {
+        self.runtime.get_field_value(field_id)
+    }
+
+    /// Set the text value of the form field at `field_id`.
+    ///
+    /// This is called by the `AutofillBridge` when the browser autofill or a
+    /// password manager fills a hidden DOM `<input>`, forwarding the value into
+    /// the WASM form model.  Non-existent paths and non-text fields are silently
+    /// ignored.
+    pub fn set_field_value(&mut self, field_id: &str, value: &str) {
+        self.runtime.set_field_value(field_id, value);
+    }
+
+    /// Return a JS array of `{ id, autocomplete, type }` objects describing
+    /// all form fields that carry an autofill hint.
+    ///
+    /// The `AutofillBridge` calls this once at init time to know which hidden
+    /// `<input>` elements to create so that browser autofill and third-party
+    /// password managers can discover and fill the fields.
+    pub fn list_autofill_fields(&self) -> JsValue {
+        self.runtime.list_autofill_fields()
+    }
 }

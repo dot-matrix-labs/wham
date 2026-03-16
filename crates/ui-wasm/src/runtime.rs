@@ -399,6 +399,110 @@ impl<A: FormApp> WasmRuntime<A> {
     }
 
     // -----------------------------------------------------------------
+    // Autofill / password-manager bridge
+    // -----------------------------------------------------------------
+
+    /// Return the current text value of a form field identified by its dot-path
+    /// string (e.g. `"email"` or `"profile.name"`).
+    ///
+    /// Returns an empty string when the path does not exist or when the field
+    /// holds a non-text value (booleans, numbers, selections, groups).
+    ///
+    /// Called by the JS `AutofillBridge` when it needs to sync the current
+    /// WASM-side value back to a hidden DOM `<input>` after a programmatic
+    /// field update (e.g. to trigger the browser's save-password prompt).
+    pub fn get_field_value(&self, field_id: &str) -> String {
+        use ui_core::form::{FieldValue, FormPath};
+        let parts: Vec<String> = field_id.split('.').map(|s| s.to_string()).collect();
+        let path = FormPath(parts);
+        if let Some(field_state) = self.form.state().get_field(&path) {
+            if let FieldValue::Text(ref v) = field_state.value {
+                return v.clone();
+            }
+        }
+        String::new()
+    }
+
+    /// Set the text value of a form field, forwarding an autofill value from
+    /// a hidden DOM `<input>` into the WASM form model.
+    ///
+    /// The `field_id` is the dot-separated path string for the field
+    /// (e.g. `"email"` or `"profile.name"`).  Non-existent paths are silently
+    /// ignored.  Only `FieldValue::Text` fields are updated; calling this on a
+    /// numeric or boolean field is a no-op.
+    ///
+    /// The update goes through `Form::set_value`, so it creates a history
+    /// snapshot and marks the field as touched/dirty, exactly as if the user
+    /// had typed the value themselves.
+    pub fn set_field_value(&mut self, field_id: &str, value: &str) {
+        use ui_core::form::{FieldValue, FormPath};
+        let parts: Vec<String> = field_id.split('.').map(|s| s.to_string()).collect();
+        let path = FormPath(parts);
+        // Only update if the field exists and holds a Text value.
+        if let Some(field_state) = self.form.state().get_field(&path) {
+            if matches!(field_state.value, FieldValue::Text(_)) {
+                let _ = self.form.set_value(&path, FieldValue::Text(value.to_string()));
+            }
+        }
+    }
+
+    /// Return a JSON array describing all form fields that have an autofill
+    /// hint set.  The JS `AutofillBridge` calls this once at init time to
+    /// know which hidden `<input>` elements to create.
+    ///
+    /// Each element in the array is an object with the shape:
+    /// ```json
+    /// { "id": "email", "autocomplete": "email", "type": "email" }
+    /// ```
+    ///
+    /// Returns `JsValue::NULL` on serialisation failure (should not happen in
+    /// practice).
+    pub fn list_autofill_fields(&self) -> JsValue {
+        // Build a JSON array of { id, autocomplete, type } objects for all
+        // fields that carry an AutocompleteHint, then serialise to JsValue.
+        let schema = self.form.schema();
+        let arr = Self::collect_autofill_json(schema.fields.as_slice(), "");
+        match serde_wasm_bindgen::to_value(&arr) {
+            Ok(v) => v,
+            Err(_) => JsValue::NULL,
+        }
+    }
+
+    /// Recursive helper that collects autofill-annotated fields into a
+    /// `Vec<serde_json::Value>`, walking into `Group` fields.
+    fn collect_autofill_json(
+        fields: &[ui_core::form::FieldSchema],
+        prefix: &str,
+    ) -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        for field in fields {
+            let full_id: String = if prefix.is_empty() {
+                field.id.clone()
+            } else {
+                format!("{}.{}", prefix, field.id)
+            };
+
+            if let Some(ref hint) = field.autocomplete {
+                out.push(serde_json::json!({
+                    "id": full_id,
+                    "autocomplete": hint.as_str(),
+                    "type": hint.input_type(),
+                }));
+            }
+
+            if let ui_core::form::FieldType::Group { fields: ref children, .. } = field.field_type {
+                let child_prefix: String = if prefix.is_empty() {
+                    field.id.clone()
+                } else {
+                    format!("{}.{}", prefix, field.id)
+                };
+                out.extend(Self::collect_autofill_json(children, &child_prefix));
+            }
+        }
+        out
+    }
+
+    // -----------------------------------------------------------------
     // Context loss
     // -----------------------------------------------------------------
 
