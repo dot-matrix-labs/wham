@@ -17,8 +17,8 @@ pub use app::FormApp;
 pub use batch::{Batch, DrawCmd, Material, Quad, TextRun, Vertex};
 pub use icon::{IconEntry, IconId, IconPack};
 pub use form::{
-    FieldId, FieldSchema, FieldState, FieldType, FieldValue, Form, FormEvent, FormPath, FormSchema,
-    FormState, PendingSubmission,
+    AutocompleteHint, FieldId, FieldSchema, FieldState, FieldType, FieldValue, Form, FormEvent,
+    FormPath, FormSchema, FormState, PendingSubmission,
 };
 pub use input::{InputEvent, KeyCode, Modifiers, PointerButton, PointerEvent, TextInputEvent};
 pub use state::History;
@@ -39,7 +39,8 @@ pub mod prelude {
     pub use crate::batch::{Batch, DrawCmd, Quad, TextRun, Vertex};
     pub use crate::icon::{IconId, IconPack};
     pub use crate::form::{
-        FieldId, FieldSchema, FieldType, FieldValue, Form, FormEvent, FormPath, FormSchema,
+        AutocompleteHint, FieldId, FieldSchema, FieldType, FieldValue, Form, FormEvent, FormPath,
+        FormSchema,
     };
     pub use crate::input::{InputEvent, KeyCode, Modifiers};
     pub use crate::text::TextBuffer;

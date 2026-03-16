@@ -80,6 +80,64 @@ impl FieldState {
     }
 }
 
+/// Hint for the browser's autofill / password-manager machinery.
+///
+/// Maps to the HTML `autocomplete` attribute values that password managers and
+/// browser autofill use to identify credential fields.  Only fields that carry
+/// one of these hints will get a corresponding hidden DOM `<input>` in the
+/// `AutofillBridge` on the JS side.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutocompleteHint {
+    /// `autocomplete="username"` — login username or user identifier.
+    Username,
+    /// `autocomplete="email"` — email address used as a login identifier or
+    /// contact address.
+    Email,
+    /// `autocomplete="current-password"` — password for the current account
+    /// (login form).
+    CurrentPassword,
+    /// `autocomplete="new-password"` — new password chosen by the user
+    /// (registration / change-password form).
+    NewPassword,
+    /// `autocomplete="name"` — full name.
+    Name,
+    /// `autocomplete="given-name"` — given (first) name.
+    GivenName,
+    /// `autocomplete="family-name"` — family (last) name.
+    FamilyName,
+    /// An explicit, arbitrary `autocomplete` token.  Use this for tokens not
+    /// covered by the enum variants above.
+    Custom(String),
+}
+
+impl AutocompleteHint {
+    /// Returns the `autocomplete` attribute string for this hint.
+    pub fn as_str(&self) -> &str {
+        match self {
+            AutocompleteHint::Username => "username",
+            AutocompleteHint::Email => "email",
+            AutocompleteHint::CurrentPassword => "current-password",
+            AutocompleteHint::NewPassword => "new-password",
+            AutocompleteHint::Name => "name",
+            AutocompleteHint::GivenName => "given-name",
+            AutocompleteHint::FamilyName => "family-name",
+            AutocompleteHint::Custom(s) => s.as_str(),
+        }
+    }
+
+    /// Returns the HTML `<input type>` most appropriate for this hint.
+    ///
+    /// Password hints → `"password"`, email hint → `"email"`, everything else
+    /// → `"text"`.
+    pub fn input_type(&self) -> &'static str {
+        match self {
+            AutocompleteHint::CurrentPassword | AutocompleteHint::NewPassword => "password",
+            AutocompleteHint::Email => "email",
+            _ => "text",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FieldType {
     Text,
@@ -96,6 +154,10 @@ pub struct FieldSchema {
     pub field_type: FieldType,
     pub rules: Vec<ValidationRule>,
     pub placeholder: Option<String>,
+    /// Autofill / password-manager hint.  When `Some`, a hidden DOM `<input>`
+    /// with the corresponding `autocomplete` attribute will be created by the
+    /// `AutofillBridge` in `app.js`.
+    pub autocomplete: Option<AutocompleteHint>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -121,7 +183,30 @@ impl FormSchema {
             field_type,
             rules: Vec::new(),
             placeholder: None,
+            autocomplete: None,
         });
+        self
+    }
+
+    /// Set the autofill / password-manager hint for the named field.
+    ///
+    /// When set, the JS `AutofillBridge` will create a hidden `<input>` with
+    /// the matching `autocomplete` attribute so that browser autofill and
+    /// third-party password managers can discover and fill the field.
+    ///
+    /// # Example
+    /// ```
+    /// use ui_core::form::{FormSchema, FieldType, AutocompleteHint};
+    /// let schema = FormSchema::new("login")
+    ///     .field("email", FieldType::Text)
+    ///     .with_autocomplete("email", AutocompleteHint::Email)
+    ///     .field("password", FieldType::Text)
+    ///     .with_autocomplete("password", AutocompleteHint::CurrentPassword);
+    /// ```
+    pub fn with_autocomplete(mut self, name: &str, hint: AutocompleteHint) -> Self {
+        if let Some(field) = self.fields.iter_mut().find(|f| f.id == name) {
+            field.autocomplete = Some(hint);
+        }
         self
     }
 
@@ -171,6 +256,7 @@ impl FormSchema {
             },
             rules: Vec::new(),
             placeholder: None,
+            autocomplete: None,
         });
         self
     }
@@ -187,6 +273,7 @@ impl FormSchema {
             },
             rules: Vec::new(),
             placeholder: None,
+            autocomplete: None,
         });
         self
     }
@@ -646,6 +733,7 @@ mod tests {
             field_type: FieldType::Text,
             rules: vec![],
             placeholder: None,
+            autocomplete: None,
         }
     }
 
@@ -730,6 +818,7 @@ mod tests {
                 field_type: FieldType::Text,
                 rules: vec![ValidationRule::Required],
                 placeholder: None,
+                autocomplete: None,
             }],
         };
         let mut form = Form::new(schema);
@@ -881,6 +970,7 @@ mod tests {
                 field_type: FieldType::Text,
                 rules: vec![ValidationRule::Required],
                 placeholder: None,
+                autocomplete: None,
             }],
         };
         let mut form = Form::new(schema);
@@ -898,6 +988,7 @@ mod tests {
                 field_type: FieldType::Text,
                 rules: vec![ValidationRule::Required],
                 placeholder: None,
+                autocomplete: None,
             }],
         };
         let mut form = Form::new(schema);
@@ -917,6 +1008,7 @@ mod tests {
                 field_type: FieldType::Text,
                 rules: vec![ValidationRule::Required],
                 placeholder: None,
+                autocomplete: None,
             }],
         };
         let mut form = Form::new(schema);
@@ -964,6 +1056,7 @@ mod tests {
                 field_type: FieldType::Text,
                 rules: vec![ValidationRule::Required],
                 placeholder: None,
+                autocomplete: None,
             }],
         };
         let mut form = Form::new(schema);
@@ -1051,6 +1144,7 @@ mod tests {
                     field_type: FieldType::Text,
                     rules: vec![],
                     placeholder: None,
+                    autocomplete: None,
                 },
                 FieldSchema {
                     id: "age".into(),
@@ -1058,6 +1152,7 @@ mod tests {
                     field_type: FieldType::Number,
                     rules: vec![],
                     placeholder: None,
+                    autocomplete: None,
                 },
                 FieldSchema {
                     id: "agree".into(),
@@ -1065,6 +1160,7 @@ mod tests {
                     field_type: FieldType::Checkbox,
                     rules: vec![],
                     placeholder: None,
+                    autocomplete: None,
                 },
             ],
         };
@@ -1299,5 +1395,64 @@ mod tests {
         let pwd_path = FormPath::root().push("password");
         assert!(form.state().get_field(&email_path).is_some());
         assert!(form.state().get_field(&pwd_path).is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // AutocompleteHint
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn autocomplete_hint_as_str() {
+        assert_eq!(AutocompleteHint::Email.as_str(), "email");
+        assert_eq!(AutocompleteHint::CurrentPassword.as_str(), "current-password");
+        assert_eq!(AutocompleteHint::NewPassword.as_str(), "new-password");
+        assert_eq!(AutocompleteHint::Username.as_str(), "username");
+        assert_eq!(AutocompleteHint::Name.as_str(), "name");
+        assert_eq!(AutocompleteHint::GivenName.as_str(), "given-name");
+        assert_eq!(AutocompleteHint::FamilyName.as_str(), "family-name");
+        assert_eq!(AutocompleteHint::Custom("cc-number".into()).as_str(), "cc-number");
+    }
+
+    #[test]
+    fn autocomplete_hint_input_type() {
+        assert_eq!(AutocompleteHint::CurrentPassword.input_type(), "password");
+        assert_eq!(AutocompleteHint::NewPassword.input_type(), "password");
+        assert_eq!(AutocompleteHint::Email.input_type(), "email");
+        assert_eq!(AutocompleteHint::Username.input_type(), "text");
+        assert_eq!(AutocompleteHint::Name.input_type(), "text");
+    }
+
+    #[test]
+    fn builder_with_autocomplete_sets_hint() {
+        let schema = FormSchema::new("login")
+            .field("email", FieldType::Text)
+            .with_autocomplete("email", AutocompleteHint::Email)
+            .field("password", FieldType::Text)
+            .with_autocomplete("password", AutocompleteHint::CurrentPassword);
+
+        let email = schema.fields.iter().find(|f| f.id == "email").unwrap();
+        let password = schema.fields.iter().find(|f| f.id == "password").unwrap();
+
+        assert_eq!(email.autocomplete, Some(AutocompleteHint::Email));
+        assert_eq!(password.autocomplete, Some(AutocompleteHint::CurrentPassword));
+    }
+
+    #[test]
+    fn builder_with_autocomplete_nonexistent_field_is_noop() {
+        let schema = FormSchema::new("test")
+            .field("email", FieldType::Text)
+            .with_autocomplete("nonexistent", AutocompleteHint::Email);
+
+        // "email" should have no autocomplete set since we referenced a non-existent field
+        let email = schema.fields.iter().find(|f| f.id == "email").unwrap();
+        assert_eq!(email.autocomplete, None);
+    }
+
+    #[test]
+    fn field_without_autocomplete_hint_defaults_to_none() {
+        let schema = FormSchema::new("test")
+            .field("username", FieldType::Text);
+        let field = schema.fields.iter().find(|f| f.id == "username").unwrap();
+        assert_eq!(field.autocomplete, None);
     }
 }

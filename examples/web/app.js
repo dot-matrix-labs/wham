@@ -356,6 +356,134 @@ class AccessibilityMirror {
   }
 }
 
+// ---------------------------------------------------------------------------
+// AutofillBridge — hidden DOM <form> with <input> elements that expose the
+// GPU-rendered form fields to browser autofill and third-party password
+// managers (1Password, Bitwarden, etc.).
+//
+// Password managers locate credential fields by scanning the DOM for
+// <input autocomplete="current-password"> (or similar) inside a <form>.
+// Because wham renders entirely on a <canvas>, those inputs don't exist
+// by default.  The AutofillBridge creates them off-screen (1 × 1 px,
+// opacity:0, position:absolute, left:-9999px) — NOT display:none, which
+// causes most password managers to ignore them.
+//
+// Flow:
+//   1. init()  — call list_autofill_fields() to discover annotated fields,
+//                create a hidden <form> with one <input> per field.
+//   2. input/change events on hidden inputs → set_field_value() → WASM.
+//   3. frame() → sync WASM field values back to hidden inputs so that
+//      browser save-password prompts see the current values.
+// ---------------------------------------------------------------------------
+class AutofillBridge {
+  /**
+   * @param {WasmApp} app   Reference to the Wasm application.
+   */
+  constructor(app) {
+    this._app = app;
+    /** @type {Map<string, HTMLInputElement>} fieldId -> hidden <input> */
+    this._inputs = new Map();
+    /** @type {HTMLFormElement|null} */
+    this._form = null;
+  }
+
+  /**
+   * Query the WASM runtime for autofill-annotated fields and create a hidden
+   * DOM <form> with corresponding <input> elements.
+   *
+   * Call this once after the WasmApp is constructed.  Safe to call multiple
+   * times — subsequent calls replace the previous hidden form.
+   */
+  init() {
+    // Tear down any previous form (e.g. if schema changed).
+    if (this._form) {
+      this._form.remove();
+      this._inputs.clear();
+    }
+
+    const fields = this._app.list_autofill_fields();
+    if (!Array.isArray(fields) || fields.length === 0) return;
+
+    // Wrap inputs in a <form> so password managers recognise them.
+    const form = document.createElement("form");
+    form.setAttribute("action", "#");
+    form.setAttribute("method", "post");
+    form.setAttribute("aria-hidden", "true");
+    // Off-screen, 1×1, opacity:0 — NOT display:none (password managers skip those).
+    Object.assign(form.style, {
+      position: "absolute",
+      left: "-9999px",
+      top: "-9999px",
+      width: "1px",
+      height: "1px",
+      opacity: "0",
+      pointerEvents: "none",
+      // Contain layout impact.
+      overflow: "hidden",
+    });
+    document.body.appendChild(form);
+    this._form = form;
+
+    for (const { id, autocomplete, type } of fields) {
+      const input = document.createElement("input");
+      input.setAttribute("autocomplete", autocomplete);
+      input.setAttribute("type", type || "text");
+      input.setAttribute("name", id);
+      input.setAttribute("id", `wham-autofill-${id.replace(/\./g, "-")}`);
+      input.setAttribute("tabindex", "-1");
+      // Prevent IME / spellcheck activity on the hidden field.
+      input.setAttribute("autocorrect", "off");
+      input.setAttribute("autocapitalize", "off");
+      input.setAttribute("spellcheck", "false");
+      Object.assign(input.style, {
+        width: "1px",
+        height: "1px",
+        opacity: "0",
+        pointerEvents: "none",
+      });
+
+      // Forward autofill values from the hidden input into WASM.
+      // Both "input" and "change" are needed:
+      //   - "input"  fires on every keystroke / programmatic injection.
+      //   - "change" fires when the user selects from a password manager
+      //     dropdown (some managers only fire "change", not "input").
+      // Browsers do NOT fire "input"/"change" when `input.value` is set
+      // programmatically, so syncToDOM() will not cause feedback loops.
+      const forward = () => {
+        this._app.set_field_value(id, input.value);
+      };
+      input.addEventListener("input", forward);
+      input.addEventListener("change", forward);
+
+      form.appendChild(input);
+      this._inputs.set(id, input);
+    }
+  }
+
+  /**
+   * Sync the current WASM field values back into the hidden inputs.
+   *
+   * Call this once per frame (after app.frame()) so that any programmatic
+   * changes to the WASM form state (e.g. the app setting a default email)
+   * are reflected in the hidden DOM inputs.  This ensures the browser's
+   * save-password prompt sees the final submitted values.
+   *
+   * Only updates inputs whose value has actually changed to avoid triggering
+   * spurious "change" events on every frame.
+   */
+  syncToDOM() {
+    for (const [id, input] of this._inputs) {
+      const wasmValue = this._app.get_field_value(id);
+      // Only update when the value differs to avoid redundant DOM mutations.
+      // Programmatic `value` assignment does NOT fire "input" or "change"
+      // events, so this cannot loop back into set_field_value().
+      if (input.value !== wasmValue) {
+        input.value = wasmValue;
+      }
+    }
+  }
+}
+
 function resize() {
   canvas.width = window.innerWidth * dpr;
   canvas.height = window.innerHeight * dpr;
@@ -711,6 +839,14 @@ async function main() {
 
   const hiddenTextarea = createHiddenTextarea();
   const a11yMirror = new AccessibilityMirror(canvas, app, dpr);
+
+  // --- Autofill / password-manager bridge ---
+  // Creates hidden <input> elements so that browser autofill and third-party
+  // password managers (1Password, Bitwarden, etc.) can discover and fill the
+  // GPU-rendered form fields.  Must be called after WasmApp is constructed so
+  // that list_autofill_fields() returns the correct schema.
+  const autofillBridge = new AutofillBridge(app);
+  autofillBridge.init();
 
   // --- Load fallback font (optional) ---
   // To support emoji or additional scripts, load a fallback font after the
@@ -1083,6 +1219,11 @@ async function main() {
     // that iOS Safari focus behaviour does not cause viewport scrolling.
     const focusedRect = app.focused_widget_rect();
     repositionTextarea(hiddenTextarea, focusedRect, dpr);
+
+    // Sync WASM field values → hidden DOM inputs so the browser's
+    // save-password prompt sees the latest state.  This is a no-op when no
+    // autofill fields are registered or when values have not changed.
+    autofillBridge.syncToDOM();
 
     requestAnimationFrame(frame);
   }

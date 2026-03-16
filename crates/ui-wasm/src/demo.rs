@@ -1,6 +1,6 @@
 use ui_core::app::FormApp;
 use ui_core::form::{
-    FieldSchema, FieldType, FieldValue, Form, FormEvent, FormPath, FormSchema,
+    AutocompleteHint, FieldSchema, FieldType, FieldValue, Form, FormEvent, FormPath, FormSchema,
 };
 use ui_core::text::TextBuffer;
 use ui_core::ui::Ui;
@@ -209,6 +209,7 @@ impl DemoApp {
                         field_type: FieldType::Text,
                         rules: vec![ValidationRule::Required],
                         placeholder: None,
+                        autocomplete: None,
                     },
                     FieldSchema {
                         id: "value".into(),
@@ -216,6 +217,7 @@ impl DemoApp {
                         field_type: FieldType::Text,
                         rules: vec![ValidationRule::Email],
                         placeholder: None,
+                        autocomplete: None,
                     },
                 ],
             );
@@ -373,9 +375,11 @@ fn login_schema() -> FormSchema {
         .with_label("email", "Email")
         .required("email")
         .with_validation("email", ValidationRule::Email)
+        .with_autocomplete("email", AutocompleteHint::Email)
         .field("password", FieldType::Text)
         .with_label("password", "Password")
         .required("password")
+        .with_autocomplete("password", AutocompleteHint::CurrentPassword)
 }
 
 fn register_schema() -> FormSchema {
@@ -384,12 +388,15 @@ fn register_schema() -> FormSchema {
         .with_label("email", "Email")
         .required("email")
         .with_validation("email", ValidationRule::Email)
+        .with_autocomplete("email", AutocompleteHint::Email)
         .field("password", FieldType::Text)
         .with_label("password", "Password")
         .required("password")
+        .with_autocomplete("password", AutocompleteHint::NewPassword)
         .field("confirm", FieldType::Text)
         .with_label("confirm", "Confirm Password")
         .required("confirm")
+        .with_autocomplete("confirm", AutocompleteHint::NewPassword)
         .field("role", FieldType::Select {
             options: vec!["User".into(), "Admin".into(), "Viewer".into()],
         })

@@ -11,6 +11,7 @@ fn required_and_email_validation() {
             field_type: FieldType::Text,
             rules: vec![ValidationRule::Required, ValidationRule::Email],
             placeholder: None,
+            autocomplete: None,
         }],
     };
     let mut form = Form::new(schema);
