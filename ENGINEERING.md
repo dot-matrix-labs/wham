@@ -259,6 +259,19 @@ _(Tasks as defined in plan.md — manifest, service worker, offline queue, push 
 
 _(Tasks as defined in plan.md — autofill integration, cross-browser testing, performance CI, error reporting, theming, documentation.)_
 
+### Phase 7: Headless Scenario Test Coverage
+
+**Goal:** Prove the library works for real downstream use cases by running realistic full-form scenarios in a headless software renderer, without a browser or WebGL.
+
+| Task | Issue | Effort | Depends On |
+|---|---|---|---|
+| `Session` harness + `FrameResult` in `wham-test` | [#120](https://github.com/dot-matrix-labs/wham/issues/120) | S | — |
+| Sign-in form headless scenario (email, password, button) | [#120](https://github.com/dot-matrix-labs/wham/issues/120) | S | Session harness |
+| Checkout form headless scenario (multi-column, select, button) | [#121](https://github.com/dot-matrix-labs/wham/issues/121) | S | — |
+| Notification settings scenario (icons, checkboxes, radio, button) | [#122](https://github.com/dot-matrix-labs/wham/issues/122) | S | — |
+
+These tests run with `cargo test -p wham-test` and require no browser. They serve as living documentation for downstream consumers of the library.
+
 ### Phase Dependencies
 
 ```
@@ -271,6 +284,8 @@ Phase 0 (Stabilize) ─┬──> Phase 1 (Correct) ──> Phase 2 (Text) ─�
                                                     Phase 5 (PWA) ──┤
                                                                     v
                                                             Phase 6 (Prod)
+
+Phase 7 (Headless Scenarios) ── runs in parallel, no blocking dependencies
 ```
 
 ## 7. Risk Register
