@@ -184,3 +184,16 @@ fn checkout_submit_button_is_last_in_tab_order() {
     assert_eq!(last.kind, WidgetKind::Button, "last widget should be the submit button");
     assert!(last.label.contains("Place order"), "button label should reference the action");
 }
+
+#[test]
+fn checkout_screenshot() {
+    use std::cell::RefCell;
+    use wham_test::{save_screenshot, Size};
+
+    let form = RefCell::new(Form::new(schema()));
+    let country = RefCell::new("United States".to_string());
+
+    save_screenshot("checkout", Size { width: 640, height: 1000 }, |ui| {
+        checkout_view(ui, &mut form.borrow_mut(), &mut country.borrow_mut());
+    });
+}
