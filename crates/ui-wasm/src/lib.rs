@@ -144,6 +144,44 @@ impl WasmApp {
         self.runtime.set_safe_area_insets(top, right, bottom, left);
     }
 
+    // -----------------------------------------------------------------
+    // Theming
+    // -----------------------------------------------------------------
+
+    /// Switch to the built-in dark (`dark = true`) or light (`dark = false`) theme.
+    pub fn set_theme(&mut self, dark: bool) {
+        self.runtime.set_theme(dark);
+    }
+
+    /// Apply a fully custom theme via individual RGBA components.
+    ///
+    /// All channel values should be in `[0.0, 1.0]`.  Accessibility
+    /// preferences (reduced_motion, high_contrast, font_scale) stored on the
+    /// current theme are preserved.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_custom_theme(
+        &mut self,
+        bg_r: f32, bg_g: f32, bg_b: f32,
+        surface_r: f32, surface_g: f32, surface_b: f32,
+        text_r: f32, text_g: f32, text_b: f32,
+        text_muted_r: f32, text_muted_g: f32, text_muted_b: f32,
+        primary_r: f32, primary_g: f32, primary_b: f32,
+        error_r: f32, error_g: f32, error_b: f32,
+        success_r: f32, success_g: f32, success_b: f32,
+        focus_ring_r: f32, focus_ring_g: f32, focus_ring_b: f32, focus_ring_a: f32,
+    ) {
+        self.runtime.set_custom_theme(
+            bg_r, bg_g, bg_b,
+            surface_r, surface_g, surface_b,
+            text_r, text_g, text_b,
+            text_muted_r, text_muted_g, text_muted_b,
+            primary_r, primary_g, primary_b,
+            error_r, error_g, error_b,
+            success_r, success_g, success_b,
+            focus_ring_r, focus_ring_g, focus_ring_b, focus_ring_a,
+        );
+    }
+
     /// Set focus to the widget with the given ID.
     /// Called from the accessibility mirror when the screen reader moves focus.
     pub fn set_focus(&mut self, id: f64) {

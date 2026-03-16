@@ -476,6 +476,204 @@ function repositionTextarea(ta, rectArray, dpr) {
   ta.style.height = `${Math.max(h, 1)}px`;
 }
 
+// ---------------------------------------------------------------------------
+// Theme management — prefers-color-scheme + animated transitions
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a CSS hex color string ("#rrggbb" or "#rrggbbaa") to an [r,g,b,a]
+ * array with channel values in [0, 1].  Returns null on parse failure.
+ * @param {string} hex
+ * @returns {[number,number,number,number]|null}
+ */
+function hexToRgba(hex) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?$/i.exec(hex.trim());
+  if (!m) return null;
+  return [
+    parseInt(m[1], 16) / 255,
+    parseInt(m[2], 16) / 255,
+    parseInt(m[3], 16) / 255,
+    m[4] ? parseInt(m[4], 16) / 255 : 1.0,
+  ];
+}
+
+/**
+ * ThemeController drives dark-mode detection and animated theme transitions.
+ *
+ * Instantiate once after the WasmApp is created.  Call `tick(now)` every
+ * animation frame so in-progress transitions advance smoothly.
+ */
+class ThemeController {
+  /**
+   * @param {WasmApp} app
+   */
+  constructor(app) {
+    this._app = app;
+    this._customOverrides = null;
+
+    // System media queries.
+    this._darkMq = window.matchMedia("(prefers-color-scheme: dark)");
+    this._reducedMotionMq = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    this._targetDark = this._darkMq.matches;
+
+    // Transition state.
+    this._TRANSITION_MS = 300;
+    this._transitionStart = null;
+    this._transitionFrom = null;  // "light" | "dark"
+    this._transitionTo = null;    // "light" | "dark"
+    this._inTransition = false;
+
+    // Apply the initial theme immediately (no animation on first paint).
+    this._applyInstant(this._targetDark);
+
+    // React to OS preference changes.
+    this._darkMq.addEventListener("change", (e) => {
+      this._startTransition(e.matches);
+    });
+  }
+
+  /**
+   * Advance any in-progress theme transition.  Call once per rAF frame.
+   * @param {number} now  Timestamp in ms (e.g. from requestAnimationFrame).
+   */
+  tick(now) {
+    if (!this._inTransition) return;
+
+    const elapsed = now - this._transitionStart;
+    const t = Math.min(elapsed / this._TRANSITION_MS, 1.0);
+
+    const fromProgress = this._transitionFrom === "dark" ? 1.0 : 0.0;
+    const toProgress   = this._transitionTo   === "dark" ? 1.0 : 0.0;
+    const progress = fromProgress + (toProgress - fromProgress) * t;
+
+    this._applyProgress(progress);
+
+    if (t >= 1.0) {
+      this._inTransition = false;
+    }
+  }
+
+  /**
+   * Apply user-supplied color overrides on top of the system theme.
+   * Pass null or an empty object to clear overrides and return to the
+   * system theme.
+   *
+   * Accepted keys (all optional, values are "#rrggbb" hex strings):
+   *   background, surface, text, text_muted, primary, error, success,
+   *   focus_ring ("#rrggbbaa" with alpha supported for focus_ring).
+   *
+   * @param {object|null} overrides
+   */
+  setCustomOverrides(overrides) {
+    this._customOverrides = (overrides && Object.keys(overrides).length > 0)
+      ? overrides
+      : null;
+    // Re-apply immediately so the new overrides take effect this frame.
+    this._applyInstant(this._targetDark);
+  }
+
+  // -- private ---------------------------------------------------------------
+
+  _startTransition(toDark) {
+    this._targetDark = toDark;
+
+    if (this._reducedMotionMq.matches) {
+      this._applyInstant(toDark);
+      return;
+    }
+
+    const currentlyDark = this._inTransition
+      ? this._transitionTo === "dark"
+      : this._transitionFrom === "dark";
+
+    this._transitionFrom = currentlyDark ? "dark" : "light";
+    this._transitionTo   = toDark ? "dark" : "light";
+    this._transitionStart = performance.now();
+    this._inTransition = true;
+  }
+
+  _applyInstant(dark) {
+    this._inTransition = false;
+    this._transitionFrom = dark ? "dark" : "light";
+    this._transitionTo   = dark ? "dark" : "light";
+    this._applyProgress(dark ? 1.0 : 0.0);
+  }
+
+  /**
+   * Push the current theme state into Wasm.
+   * @param {number} progress  0.0 = fully light, 1.0 = fully dark
+   */
+  _applyProgress(progress) {
+    // Snap to the nearest built-in theme.  A future improvement could add a
+    // dedicated WASM binding for per-frame lerp to achieve pixel-perfect
+    // interpolation, but snapping is sufficient for 300 ms transitions.
+    this._app.set_theme(progress >= 0.5);
+
+    if (this._customOverrides) {
+      this._applyCustomOverrides(this._customOverrides);
+    }
+  }
+
+  /**
+   * Apply user-supplied hex overrides on top of the current WASM theme.
+   * @param {object} overrides
+   */
+  _applyCustomOverrides(overrides) {
+    const dark = this._targetDark;
+
+    // Built-in defaults — filled when the caller omits a key.
+    const D = dark ? {
+      bg:         [0.102, 0.102, 0.102, 1.0],
+      surface:    [0.145, 0.145, 0.145, 1.0],
+      text:       [0.910, 0.910, 0.910, 1.0],
+      text_muted: [0.565, 0.565, 0.565, 1.0],
+      primary:    [0.350, 0.580, 0.980, 1.0],
+      error:      [0.980, 0.360, 0.360, 1.0],
+      success:    [0.270, 0.820, 0.380, 1.0],
+      focus_ring: [0.350, 0.580, 0.980, 0.85],
+    } : {
+      bg:         [0.970, 0.970, 0.960, 1.0],
+      surface:    [1.000, 1.000, 1.000, 1.0],
+      text:       [0.100, 0.100, 0.120, 1.0],
+      text_muted: [0.400, 0.400, 0.450, 1.0],
+      primary:    [0.200, 0.450, 0.900, 1.0],
+      error:      [0.880, 0.200, 0.200, 1.0],
+      success:    [0.200, 0.700, 0.300, 1.0],
+      focus_ring: [0.200, 0.450, 0.900, 0.80],
+    };
+
+    const resolve = (key, def) => {
+      const val = overrides[key];
+      if (val && typeof val === "string") {
+        const parsed = hexToRgba(val);
+        if (parsed) return parsed;
+      }
+      return def;
+    };
+
+    const bg      = resolve("background", D.bg);
+    const surface = resolve("surface",    D.surface);
+    const text    = resolve("text",       D.text);
+    const tm      = resolve("text_muted", D.text_muted);
+    const primary = resolve("primary",    D.primary);
+    const error   = resolve("error",      D.error);
+    const success = resolve("success",    D.success);
+    const fr      = resolve("focus_ring", D.focus_ring);
+
+    this._app.set_custom_theme(
+      bg[0],      bg[1],      bg[2],
+      surface[0], surface[1], surface[2],
+      text[0],    text[1],    text[2],
+      tm[0],      tm[1],      tm[2],
+      primary[0], primary[1], primary[2],
+      error[0],   error[1],   error[2],
+      success[0], success[1], success[2],
+      fr[0],      fr[1],      fr[2],      fr[3],
+    );
+  }
+}
+
 async function main() {
   await init();
   resize();
@@ -491,6 +689,25 @@ async function main() {
   // Debug overlay — opt-in via `window.__WHAM_DEBUG = true` before init().
   const showFrameStats = !!(window.__WHAM_DEBUG);
   const frameStatsOverlay = showFrameStats ? createFrameStatsOverlay() : null;
+
+  // --- Theme controller — prefers-color-scheme + app-level customization ---
+  const themeCtrl = new ThemeController(app);
+
+  /**
+   * Global API for app-level theme customization.
+   *
+   * Accepts a JS object with optional "#rrggbb" hex color overrides:
+   *   window.whamSetTheme({ primary: "#ff6600", background: "#0d0d0d" })
+   *
+   * Supported keys: background, surface, text, text_muted, primary, error,
+   * success, focus_ring.  Pass null to clear overrides and revert to the
+   * system theme.
+   *
+   * @param {object|null} themeConfig
+   */
+  window.whamSetTheme = (themeConfig) => {
+    themeCtrl.setCustomOverrides(themeConfig);
+  };
 
   const hiddenTextarea = createHiddenTextarea();
   const a11yMirror = new AccessibilityMirror(canvas, app, dpr);
@@ -820,6 +1037,10 @@ async function main() {
     // we skip recording to avoid an anomalously large first sample.
     const frameMs = prevFrameTs > 0 ? ts - prevFrameTs : 0;
     prevFrameTs = ts;
+
+    // Advance any in-progress theme transition before rendering so the Wasm
+    // runtime receives updated theme colors this frame.
+    themeCtrl.tick(ts);
 
     const a11y = app.frame(ts);
     // NOTE: After calling app.frame() any typed-array views into

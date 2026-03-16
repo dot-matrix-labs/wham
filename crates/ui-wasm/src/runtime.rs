@@ -352,6 +352,53 @@ impl<A: FormApp> WasmRuntime<A> {
     }
 
     // -----------------------------------------------------------------
+    // Theming
+    // -----------------------------------------------------------------
+
+    /// Switch to the built-in dark (`dark = true`) or light (`dark = false`) theme.
+    ///
+    /// Call this from JS whenever `prefers-color-scheme` changes or when the
+    /// user toggles the theme manually.
+    pub fn set_theme(&mut self, dark: bool) {
+        let theme = if dark {
+            Theme::dark()
+        } else {
+            Theme::light()
+        };
+        *self.ui.theme_mut() = theme;
+    }
+
+    /// Apply a fully custom theme via individual RGBA color components.
+    ///
+    /// All channel values should be in `[0.0, 1.0]`.  Accessibility
+    /// preferences (reduced_motion, high_contrast, font_scale) stored on
+    /// the current theme are preserved so they are not silently overwritten.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_custom_theme(
+        &mut self,
+        bg_r: f32, bg_g: f32, bg_b: f32,
+        surface_r: f32, surface_g: f32, surface_b: f32,
+        text_r: f32, text_g: f32, text_b: f32,
+        text_muted_r: f32, text_muted_g: f32, text_muted_b: f32,
+        primary_r: f32, primary_g: f32, primary_b: f32,
+        error_r: f32, error_g: f32, error_b: f32,
+        success_r: f32, success_g: f32, success_b: f32,
+        focus_ring_r: f32, focus_ring_g: f32, focus_ring_b: f32, focus_ring_a: f32,
+    ) {
+        use ui_core::types::Color;
+        let t = self.ui.theme_mut();
+        t.colors.background = Color::rgba(bg_r, bg_g, bg_b, 1.0);
+        t.colors.surface = Color::rgba(surface_r, surface_g, surface_b, 1.0);
+        t.colors.text = Color::rgba(text_r, text_g, text_b, 1.0);
+        t.colors.text_muted = Color::rgba(text_muted_r, text_muted_g, text_muted_b, 1.0);
+        t.colors.primary = Color::rgba(primary_r, primary_g, primary_b, 1.0);
+        t.colors.error = Color::rgba(error_r, error_g, error_b, 1.0);
+        t.colors.success = Color::rgba(success_r, success_g, success_b, 1.0);
+        t.colors.focus_ring =
+            Color::rgba(focus_ring_r, focus_ring_g, focus_ring_b, focus_ring_a);
+    }
+
+    // -----------------------------------------------------------------
     // Context loss
     // -----------------------------------------------------------------
 
