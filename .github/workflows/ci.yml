@@ -108,13 +108,14 @@ jobs:
 
       - name: Render scenario screenshots
         run: |
-          mkdir -p tests/screenshots
-          WHAM_SCREENSHOT_DIR=tests/screenshots cargo test -p wham-test screenshot -- --nocapture
+          mkdir -p $GITHUB_WORKSPACE/tests/screenshots
+          WHAM_SCREENSHOT_DIR=$GITHUB_WORKSPACE/tests/screenshots \
+            cargo test -p wham-test screenshot -- --nocapture
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: form-screenshots-${{ github.sha }}
-          path: tests/screenshots/
+          name: form-screenshots
+          path: ${{ github.workspace }}/tests/screenshots/
           retention-days: 30
