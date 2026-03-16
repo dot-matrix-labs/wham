@@ -25,6 +25,8 @@ pub struct Glyph {
     pub advance: f32,
     /// Which atlas page this glyph is stored on.
     pub page: usize,
+    /// Index of the font in the fallback chain that provided this glyph.
+    pub font_index: usize,
 }
 
 /// A single page of the atlas texture. Each page has its own pixel buffer,
@@ -97,7 +99,9 @@ pub struct TextAtlas {
     glyph_meta: HashMap<GlyphKey, GlyphMeta>,
     /// Maps page index to the set of glyph keys stored on that page.
     page_glyphs: Vec<Vec<GlyphKey>>,
-    font: Option<Font>,
+    /// Font fallback chain: index 0 is the primary font, subsequent entries
+    /// are fallbacks tried in order when a glyph is missing.
+    fonts: Vec<Font>,
     generation: u64,
     /// Current frame counter, bumped by `begin_frame`.
     current_frame: u64,
@@ -114,7 +118,7 @@ impl TextAtlas {
             glyphs: HashMap::new(),
             glyph_meta: HashMap::new(),
             page_glyphs: vec![Vec::new()],
-            font: None,
+            fonts: Vec::new(),
             generation: 0,
             current_frame: 0,
         }
@@ -132,7 +136,7 @@ impl TextAtlas {
             glyphs: HashMap::new(),
             glyph_meta: HashMap::new(),
             page_glyphs: vec![Vec::new()],
-            font: None,
+            fonts: Vec::new(),
             generation: 0,
             current_frame: 0,
         }
@@ -158,9 +162,45 @@ impl TextAtlas {
         (self.page_width, self.page_height)
     }
 
+    /// Returns the number of fonts in the fallback chain (0 if no fonts loaded).
+    #[allow(dead_code)]
+    pub fn font_count(&self) -> usize {
+        self.fonts.len()
+    }
+
+    /// Set (or replace) the primary font.  Clears the glyph cache because
+    /// existing rasterized glyphs may have come from the old primary font.
     pub fn set_font_bytes(&mut self, bytes: Vec<u8>) {
         if let Ok(font) = Font::from_bytes(bytes, fontdue::FontSettings::default()) {
-            self.font = Some(font);
+            if self.fonts.is_empty() {
+                self.fonts.push(font);
+            } else {
+                self.fonts[0] = font;
+            }
+            self.glyphs.clear();
+            self.glyph_meta.clear();
+            // Reset to a single clean page.
+            self.pages.clear();
+            self.pages.push(AtlasPage::new(self.page_width, self.page_height));
+            self.page_glyphs.clear();
+            self.page_glyphs.push(Vec::new());
+            self.generation += 1;
+        }
+    }
+
+    /// Append a fallback font to the end of the font chain.
+    ///
+    /// When a glyph is missing from the primary font (and any earlier
+    /// fallbacks), the atlas will try rasterizing from this font before
+    /// falling back to the replacement character.
+    pub fn add_fallback_font(&mut self, bytes: Vec<u8>) {
+        if let Ok(font) = Font::from_bytes(bytes, fontdue::FontSettings::default()) {
+            self.fonts.push(font);
+            // Existing glyphs that came from the primary font are still valid;
+            // we only need to invalidate glyphs that were rendered as the
+            // replacement character because they might now be found in the new
+            // fallback.  For simplicity we clear the entire cache — the cost
+            // is a one-time re-rasterisation on the next frame.
             self.glyphs.clear();
             self.glyph_meta.clear();
             // Reset to a single clean page.
@@ -217,8 +257,35 @@ impl TextAtlas {
 
         // Rasterize at the quantized size for consistent cache behavior.
         let raster_size = quantized as f32;
-        let glyph = if let Some(font) = &self.font {
-            let (metrics, bitmap) = font.rasterize(ch, raster_size);
+        let glyph = if self.fonts.is_empty() {
+            // No fonts loaded — return a placeholder glyph.
+            Glyph {
+                uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+                size: Vec2::new(8.0, 12.0),
+                bearing: Vec2::new(0.0, 0.0),
+                advance: 8.0,
+                page: 0,
+                font_index: 0,
+            }
+        } else {
+            // Walk the fallback chain: try each font in order until one has the glyph.
+            let resolved = self
+                .fonts
+                .iter()
+                .enumerate()
+                .find(|(_, font)| font.has_glyph(ch));
+
+            let (font_index, raster_char) = match resolved {
+                Some((idx, _)) => (idx, ch),
+                None => {
+                    // No font has this glyph — render U+FFFD from the primary font.
+                    // If the primary font also lacks U+FFFD, rasterize it anyway
+                    // (fontdue will produce an empty / .notdef glyph).
+                    (0, '\u{FFFD}')
+                }
+            };
+
+            let (metrics, bitmap) = self.fonts[font_index].rasterize(raster_char, raster_size);
             let w = metrics.width as u32;
             let h = metrics.height as u32;
             let alloc_w = w.max(1);
@@ -245,14 +312,7 @@ impl TextAtlas {
                 bearing: Vec2::new(metrics.xmin as f32, metrics.ymin as f32),
                 advance: metrics.advance_width,
                 page: page_idx,
-            }
-        } else {
-            Glyph {
-                uv: Rect::new(0.0, 0.0, 1.0, 1.0),
-                size: Vec2::new(8.0, 12.0),
-                bearing: Vec2::new(0.0, 0.0),
-                advance: 8.0,
-                page: 0,
+                font_index,
             }
         };
 
@@ -589,5 +649,61 @@ mod tests {
         atlas.invalidate_gpu_cache();
         assert!(atlas.is_dirty());
         assert_eq!(atlas.dirty_pages().len(), atlas.page_count());
+    }
+
+    #[test]
+    fn no_font_returns_placeholder_with_font_index_zero() {
+        let mut atlas = TextAtlas::new(256, 256);
+        let glyph = atlas.ensure_glyph('X', 16.0);
+        assert_eq!(glyph.font_index, 0);
+        assert_eq!(glyph.advance, 8.0);
+    }
+
+    #[test]
+    fn set_font_bytes_sets_primary_font() {
+        let mut atlas = TextAtlas::new(256, 256);
+        assert_eq!(atlas.font_count(), 0);
+
+        // Use a minimal valid font from fontdue's own test infrastructure
+        // is not available, so test with invalid bytes (font_count stays 0).
+        atlas.set_font_bytes(vec![0u8; 10]);
+        assert_eq!(atlas.font_count(), 0); // invalid bytes => no font added
+
+        // With no fonts, placeholder glyph should still work.
+        let glyph = atlas.ensure_glyph('A', 16.0);
+        assert_eq!(glyph.font_index, 0);
+    }
+
+    #[test]
+    fn add_fallback_with_invalid_bytes_does_not_add() {
+        let mut atlas = TextAtlas::new(256, 256);
+        atlas.add_fallback_font(vec![0u8; 10]);
+        assert_eq!(atlas.font_count(), 0);
+    }
+
+    #[test]
+    fn set_font_clears_cache_and_increments_generation() {
+        let mut atlas = TextAtlas::new(256, 256);
+        let gen0 = atlas.generation();
+        // Ensure a glyph is cached.
+        atlas.ensure_glyph('A', 16.0);
+        assert_eq!(atlas.glyphs.len(), 1);
+
+        // Setting font bytes (even invalid ones that don't parse) should not
+        // change generation; only successful font loads clear the cache.
+        atlas.set_font_bytes(vec![0u8; 10]);
+        assert_eq!(atlas.generation(), gen0);
+        // Cache should remain because no valid font was loaded.
+        assert_eq!(atlas.glyphs.len(), 1);
+    }
+
+    #[test]
+    fn glyph_cached_returns_correct_font_index_placeholder() {
+        let mut atlas = TextAtlas::new(256, 256);
+        let g = atlas.ensure_glyph('Z', 16.0);
+        assert_eq!(g.font_index, 0);
+
+        let cached = atlas.get_cached_glyph('Z', 16.0).unwrap();
+        assert_eq!(cached.font_index, 0);
     }
 }

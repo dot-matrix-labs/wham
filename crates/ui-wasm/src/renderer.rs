@@ -113,6 +113,10 @@ impl Renderer {
         self.init_atlas_textures();
     }
 
+    pub fn add_fallback_font(&mut self, bytes: Vec<u8>) {
+        self.atlas.add_fallback_font(bytes);
+    }
+
     /// Returns a mutable reference to the text atlas so that callers can
     /// pre-rasterize glyphs during the layout pass (before rendering).
     pub fn atlas_mut(&mut self) -> &mut TextAtlas {

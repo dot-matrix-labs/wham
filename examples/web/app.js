@@ -344,6 +344,16 @@ async function main() {
   const hiddenTextarea = createHiddenTextarea();
   const a11yMirror = new AccessibilityMirror(canvas, app, dpr);
 
+  // --- Load fallback font (optional) ---
+  // To support emoji or additional scripts, load a fallback font after the
+  // primary font.  The fallback chain is tried in order when a glyph is
+  // missing from the primary font.
+  //
+  // Example:
+  //   fetch("NotoColorEmoji-Regular.ttf")
+  //     .then(r => r.arrayBuffer())
+  //     .then(buf => app.add_fallback_font(new Uint8Array(buf)));
+
   // --- IME composition state ---
   // Track whether an IME composition session is active so we can suppress
   // redundant text-input events that would cause double-insertion of the

@@ -30,6 +30,15 @@ impl WasmApp {
         self.runtime.set_font_bytes(bytes);
     }
 
+    /// Append a fallback font to the font chain.
+    ///
+    /// When a glyph is missing from the primary font (and any earlier
+    /// fallbacks), the atlas will try rasterizing from this font before
+    /// falling back to the Unicode replacement character (U+FFFD).
+    pub fn add_fallback_font(&mut self, bytes: Vec<u8>) {
+        self.runtime.add_fallback_font(bytes);
+    }
+
     pub fn frame(&mut self, timestamp_ms: f64) -> Result<JsValue, JsValue> {
         self.runtime.frame(timestamp_ms)
     }

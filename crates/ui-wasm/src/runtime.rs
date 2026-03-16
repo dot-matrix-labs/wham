@@ -99,6 +99,11 @@ impl<A: FormApp> WasmRuntime<A> {
         self.renderer.set_font_bytes(bytes);
     }
 
+    /// Append a fallback font to the renderer's text atlas fallback chain.
+    pub fn add_fallback_font(&mut self, bytes: Vec<u8>) {
+        self.renderer.add_fallback_font(bytes);
+    }
+
     // -----------------------------------------------------------------
     // Event forwarding
     // -----------------------------------------------------------------
