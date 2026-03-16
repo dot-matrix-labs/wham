@@ -98,7 +98,8 @@ impl<A: FormApp> WasmRuntime<A> {
                 .unwrap_or(font_size * 0.6)
         }));
 
-        self.renderer.render(&batch)?;
+        let dirty = self.ui.dirty_tracker();
+        self.renderer.render_with_dirty(&batch, Some(dirty))?;
 
         let serializer =
             serde_wasm_bindgen::Serializer::new().serialize_large_number_types_as_bigints(true);
@@ -112,6 +113,9 @@ impl<A: FormApp> WasmRuntime<A> {
         self.height = height;
         self.scale = scale;
         self.renderer.resize(width, height);
+        // Window resize invalidates every widget's position/size — force a
+        // full rebuild on the next frame.
+        self.ui.invalidate_all();
     }
 
     /// Forward a font to the renderer's text atlas.

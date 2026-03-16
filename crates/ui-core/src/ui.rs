@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::accessibility::{A11yNode, A11yRole, A11yState, A11yTree};
-use crate::batch::{Batch, Material, Quad, TextRun};
+use crate::batch::{Batch, DirtyTracker, Material, Quad, TextRun, WidgetId};
 use crate::form::{FieldValue, Form, FormPath};
 use crate::hit_test::{HitTestEntry, HitTestGrid};
 use crate::icon::{IconId, IconPack};
@@ -309,6 +309,15 @@ pub struct Ui {
     /// The loaded icon pack used by the `icon()` widget to look up UV
     /// coordinates for named icons.
     icon_pack: Option<IconPack>,
+    /// Dirty-region tracker: knows which widgets need quad rebuilds.
+    dirty_tracker: DirtyTracker,
+    /// Snapshot of the previous frame's vertex and index buffers.
+    /// Clean widgets copy geometry from here instead of recomputing quads.
+    prev_batch: Batch,
+    /// Per-widget visual fingerprints from the previous frame.
+    /// A fingerprint is a hash of all inputs that affect a widget's rendered
+    /// appearance (value, hover, focus, pressed, theme hash).
+    widget_fingerprints: HashMap<WidgetId, u64>,
 }
 
 /// Minimum touch target size in logical pixels (Apple HIG: 44pt).
@@ -366,6 +375,9 @@ impl Ui {
             safe_area: [0.0; 4],
             char_advance: Box::new(|_ch, font_size| font_size * 0.6),
             icon_pack: None,
+            dirty_tracker: DirtyTracker::default(),
+            prev_batch: Batch::default(),
+            widget_fingerprints: HashMap::new(),
         }
     }
 
@@ -482,6 +494,124 @@ impl Ui {
     }
 
     // -----------------------------------------------------------------
+    // Dirty-region tracking API
+    // -----------------------------------------------------------------
+
+    /// Returns a shared reference to the dirty tracker.
+    pub fn dirty_tracker(&self) -> &DirtyTracker {
+        &self.dirty_tracker
+    }
+
+    /// Mark all widgets as dirty for the next frame (e.g. after a theme
+    /// change or window resize that invalidates every widget's appearance).
+    pub fn invalidate_all(&mut self) {
+        self.dirty_tracker.mark_fully_dirty();
+    }
+
+    /// Mark a single widget as needing a quad rebuild this frame.
+    ///
+    /// Callers that manage their own widget state (e.g. custom widgets
+    /// outside `Ui`) can call this whenever a widget's visual inputs change.
+    pub fn mark_widget_dirty(&mut self, id: WidgetId) {
+        self.dirty_tracker.mark_dirty(id);
+    }
+
+    /// Compute the visual fingerprint of a widget for dirty detection.
+    ///
+    /// The fingerprint incorporates all inputs that affect the widget's
+    /// rendered appearance: an application-supplied `value_hash` (typically
+    /// a hash of the widget's value string), the hover/focus/pressed booleans,
+    /// and a compact theme hash so theme changes automatically dirty widgets.
+    ///
+    /// Returns `true` if the widget is dirty this frame (inputs changed or
+    /// the tracker is in fully-dirty mode).
+    pub fn check_widget_dirty(
+        &mut self,
+        id: WidgetId,
+        value_hash: u64,
+        hovered: bool,
+        focused: bool,
+        pressed: bool,
+    ) -> bool {
+        if self.dirty_tracker.is_fully_dirty() {
+            let fp = Self::compute_fingerprint(value_hash, hovered, focused, pressed, self.theme_hash());
+            self.widget_fingerprints.insert(id, fp);
+            return true;
+        }
+
+        let fp = Self::compute_fingerprint(value_hash, hovered, focused, pressed, self.theme_hash());
+        let prev = self.widget_fingerprints.get(&id).copied();
+        let dirty = prev != Some(fp);
+        if dirty {
+            self.dirty_tracker.mark_dirty(id);
+        }
+        self.widget_fingerprints.insert(id, fp);
+        dirty
+    }
+
+    /// Attempt to reuse a clean widget's geometry from the previous frame.
+    ///
+    /// If the widget's previous-frame range is available, its vertices and
+    /// indices are copied into the current batch (with rebased index offsets)
+    /// and `true` is returned.  Returns `false` when the widget is new (no
+    /// previous range) and the caller must emit quads normally.
+    pub fn try_reuse_widget(&mut self, id: WidgetId) -> bool {
+        let range = match self.dirty_tracker.prev_range(id) {
+            Some(r) => r.clone(),
+            None => return false,
+        };
+        let v_len = self.prev_batch.vertices.len();
+        let i_len = self.prev_batch.indices.len();
+        if range.vertex_end > v_len || range.index_end > i_len {
+            return false;
+        }
+        // Safety: prev_batch and batch are distinct fields; we read from the
+        // former while writing into the latter.
+        let prev_vertices = unsafe {
+            std::slice::from_raw_parts(self.prev_batch.vertices.as_ptr(), v_len)
+        };
+        let prev_indices = unsafe {
+            std::slice::from_raw_parts(self.prev_batch.indices.as_ptr(), i_len)
+        };
+        self.batch.reuse_widget(id, prev_vertices, prev_indices, &range);
+        true
+    }
+
+    /// Compact theme hash for widget fingerprints.
+    fn theme_hash(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.theme.high_contrast.hash(&mut h);
+        self.theme.reduced_motion.hash(&mut h);
+        let c = &self.theme.colors;
+        let pack = |r: f32, g: f32, b: f32, a: f32| -> u64 {
+            ((r.to_bits() as u64) << 32)
+                | (g.to_bits() as u64)
+                ^ ((b.to_bits() as u64) << 16)
+                ^ (a.to_bits() as u64)
+        };
+        pack(c.primary.r, c.primary.g, c.primary.b, c.primary.a).hash(&mut h);
+        pack(c.surface.r, c.surface.g, c.surface.b, c.surface.a).hash(&mut h);
+        pack(c.text.r, c.text.g, c.text.b, c.text.a).hash(&mut h);
+        h.finish()
+    }
+
+    fn compute_fingerprint(
+        value_hash: u64,
+        hovered: bool,
+        focused: bool,
+        pressed: bool,
+        theme_hash: u64,
+    ) -> u64 {
+        let mut h = DefaultHasher::new();
+        value_hash.hash(&mut h);
+        hovered.hash(&mut h);
+        focused.hash(&mut h);
+        pressed.hash(&mut h);
+        theme_hash.hash(&mut h);
+        h.finish()
+    }
+
+    // -----------------------------------------------------------------
     // Frame lifecycle
     // -----------------------------------------------------------------
 
@@ -544,6 +674,23 @@ impl Ui {
                 rect: self.touch_rect(widget.rect),
             });
         }
+
+        // Advance dirty tracking: record this frame's widget ranges as the
+        // "previous" ranges for the next frame, then snapshot the vertex and
+        // index buffers so clean widgets can copy geometry next frame without
+        // regenerating quads.
+        //
+        // We copy only vertices and indices (not text_runs / commands, which
+        // are transient).  The full batch remains available to the caller via
+        // `take_batch()` / `batch()`.
+        let ranges = self.batch.widget_ranges().clone();
+        self.dirty_tracker.end_frame(&ranges);
+        // Snapshot vertex/index data for next-frame geometry reuse.
+        self.prev_batch.vertices.clear();
+        self.prev_batch.vertices.extend_from_slice(&self.batch.vertices);
+        self.prev_batch.indices.clear();
+        self.prev_batch.indices.extend_from_slice(&self.batch.indices);
+
         A11yTree {
             root: A11yNode {
                 id: 1,

@@ -4,7 +4,7 @@ use web_sys::{
     WebGlTexture, WebGlUniformLocation,
 };
 
-use ui_core::batch::{Batch, Material, Quad, TextRun};
+use ui_core::batch::{Batch, DirtyTracker, Material, Quad, TextRun};
 use ui_core::types::Rect;
 
 use crate::atlas::TextAtlas;
@@ -56,6 +56,14 @@ pub struct Renderer {
     aloc_color: u32,
     /// `a_flags` attribute index.
     aloc_flags: u32,
+
+    /// Number of floats currently allocated in the VBO on the GPU.
+    /// Used to decide whether `bufferSubData` is safe (i.e. the new data
+    /// fits within the already-allocated GPU buffer) or a full
+    /// `bufferData` reallocation is needed.
+    vbo_capacity_floats: usize,
+    /// Number of u32 indices currently allocated in the IBO on the GPU.
+    ibo_capacity_indices: usize,
 }
 
 impl Renderer {
@@ -97,6 +105,8 @@ impl Renderer {
             aloc_uv: 0,
             aloc_color: 0,
             aloc_flags: 0,
+            vbo_capacity_floats: 0,
+            ibo_capacity_indices: 0,
         };
         renderer.cache_locations();
         renderer.init_atlas_textures();
@@ -149,6 +159,10 @@ impl Renderer {
         self.icon_atlas.invalidate_gpu_cache();
         self.init_atlas_textures();
         self.resize(self.width, self.height);
+
+        // New GPU buffers have no allocated capacity yet.
+        self.vbo_capacity_floats = 0;
+        self.ibo_capacity_indices = 0;
 
         self.context_valid = true;
         Ok(())
@@ -215,13 +229,30 @@ impl Renderer {
     /// converted to quads (via [`resolve_text_runs`]) before calling this
     /// method — the renderer only performs GPU upload and draw dispatch.
     pub fn render(&mut self, batch: &Batch) -> Result<(), JsValue> {
+        self.render_with_dirty(batch, None)
+    }
+
+    /// Render a fully-resolved batch with optional dirty-region tracking.
+    ///
+    /// When `dirty` is `Some(&tracker)` and `tracker.is_fully_dirty()` is
+    /// `false`, only the vertex ranges belonging to dirty widgets are
+    /// re-uploaded via `gl.bufferSubData()`.  This avoids saturating the
+    /// PCIe / UMA bus for frames where only a handful of widgets changed.
+    ///
+    /// When `dirty` is `None` or the tracker reports a full-dirty frame, the
+    /// entire vertex and index buffers are re-uploaded with `gl.bufferData()`.
+    pub fn render_with_dirty(
+        &mut self,
+        batch: &Batch,
+        dirty: Option<&DirtyTracker>,
+    ) -> Result<(), JsValue> {
         if !self.context_valid {
             return Ok(());
         }
         self.sync_atlas_textures()?;
         self.upload_atlas_if_needed();
         self.upload_icon_atlas_if_needed();
-        self.draw_batch(batch)
+        self.draw_batch_with_dirty(batch, dirty)
     }
 
     /// Ensure we have GPU textures for all atlas pages.
@@ -348,35 +379,126 @@ impl Renderer {
         gl.uniform1i(self.uloc_icon_atlas.as_ref(), 1);
     }
 
-    fn draw_batch(&mut self, batch: &Batch) -> Result<(), JsValue> {
+    fn draw_batch_with_dirty(
+        &mut self,
+        batch: &Batch,
+        dirty: Option<&DirtyTracker>,
+    ) -> Result<(), JsValue> {
         let gl = &self.gl;
         gl.use_program(Some(&self.program));
 
         gl.uniform2f(self.uloc_resolution.as_ref(), self.width, self.height);
 
-        let mut vertex_data: Vec<f32> = Vec::with_capacity(batch.vertices.len() * 9);
-        for v in &batch.vertices {
-            vertex_data.push(v.pos.x);
-            vertex_data.push(v.pos.y);
-            vertex_data.push(v.uv.x);
-            vertex_data.push(v.uv.y);
-            vertex_data.push(v.color.r);
-            vertex_data.push(v.color.g);
-            vertex_data.push(v.color.b);
-            vertex_data.push(v.color.a);
-            vertex_data.push(v.flags as f32);
-        }
-        let index_data = batch.indices.clone();
+        // --- Vertex buffer pack ---
+        // Each Vertex is serialised as 9 floats: pos(2) uv(2) color(4) flags(1).
+        const FLOATS_PER_VERTEX: usize = 9;
+        let total_floats = batch.vertices.len() * FLOATS_PER_VERTEX;
+        let total_indices = batch.indices.len();
+
+        // Determine whether we can use bufferSubData (partial update) or must
+        // use bufferData (full reallocation).
+        //
+        // Conditions for partial update:
+        // 1. dirty tracker is present and reports a partial-dirty frame.
+        // 2. The new data fits within the GPU buffer already allocated (i.e.
+        //    the vertex/index counts did not grow since last frame).
+        let use_partial = dirty
+            .map(|t| !t.is_fully_dirty())
+            .unwrap_or(false)
+            && total_floats <= self.vbo_capacity_floats
+            && total_indices <= self.ibo_capacity_indices;
 
         gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.vbo));
-        unsafe {
-            let vert_array = js_sys::Float32Array::view(&vertex_data);
-            gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &vert_array, Gl::DYNAMIC_DRAW);
-        }
         gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&self.ibo));
-        unsafe {
-            let idx_array = js_sys::Uint32Array::view(&index_data);
-            gl.buffer_data_with_array_buffer_view(Gl::ELEMENT_ARRAY_BUFFER, &idx_array, Gl::DYNAMIC_DRAW);
+
+        if use_partial {
+            // Partial update: only upload vertex ranges for dirty widgets.
+            // The index buffer always needs a full re-upload because the
+            // `reuse_widget` path rebases indices — every widget's indices
+            // change position even if its vertex data is identical.
+            //
+            // Vertex data for clean widgets is already correct in the GPU
+            // buffer from the previous frame (same byte offsets because the
+            // batch was built by copying clean widget data first).
+
+            let tracker = dirty.unwrap();
+
+            // Build a packed f32 array for the entire vertex buffer (same as
+            // the full path) — this is needed to identify changed sub-ranges.
+            let mut vertex_data: Vec<f32> = Vec::with_capacity(total_floats);
+            for v in &batch.vertices {
+                vertex_data.push(v.pos.x);
+                vertex_data.push(v.pos.y);
+                vertex_data.push(v.uv.x);
+                vertex_data.push(v.uv.y);
+                vertex_data.push(v.color.r);
+                vertex_data.push(v.color.g);
+                vertex_data.push(v.color.b);
+                vertex_data.push(v.color.a);
+                vertex_data.push(v.flags as f32);
+            }
+
+            // Upload only the vertex sub-ranges that belong to dirty widgets.
+            for (id, range) in batch.widget_ranges() {
+                if tracker.is_dirty(*id) {
+                    let float_start = range.vertex_start * FLOATS_PER_VERTEX;
+                    let float_end = range.vertex_end * FLOATS_PER_VERTEX;
+                    let byte_offset = (float_start * 4) as i32;
+                    unsafe {
+                        let sub = js_sys::Float32Array::view(&vertex_data[float_start..float_end]);
+                        gl.buffer_sub_data_with_i32_and_array_buffer_view(
+                            Gl::ARRAY_BUFFER,
+                            byte_offset,
+                            &sub,
+                        );
+                    }
+                }
+            }
+
+            // Index buffer: always full-upload (indices are rebased each frame).
+            unsafe {
+                let idx_array = js_sys::Uint32Array::view(&batch.indices);
+                gl.buffer_sub_data_with_i32_and_array_buffer_view(
+                    Gl::ELEMENT_ARRAY_BUFFER,
+                    0,
+                    &idx_array,
+                );
+            }
+        } else {
+            // Full upload: pack all vertices and re-allocate GPU buffers.
+            let mut vertex_data: Vec<f32> = Vec::with_capacity(total_floats);
+            for v in &batch.vertices {
+                vertex_data.push(v.pos.x);
+                vertex_data.push(v.pos.y);
+                vertex_data.push(v.uv.x);
+                vertex_data.push(v.uv.y);
+                vertex_data.push(v.color.r);
+                vertex_data.push(v.color.g);
+                vertex_data.push(v.color.b);
+                vertex_data.push(v.color.a);
+                vertex_data.push(v.flags as f32);
+            }
+
+            unsafe {
+                let vert_array = js_sys::Float32Array::view(&vertex_data);
+                gl.buffer_data_with_array_buffer_view(
+                    Gl::ARRAY_BUFFER,
+                    &vert_array,
+                    Gl::DYNAMIC_DRAW,
+                );
+            }
+            unsafe {
+                let idx_array = js_sys::Uint32Array::view(&batch.indices);
+                gl.buffer_data_with_array_buffer_view(
+                    Gl::ELEMENT_ARRAY_BUFFER,
+                    &idx_array,
+                    Gl::DYNAMIC_DRAW,
+                );
+            }
+
+            // Record new GPU buffer capacities.
+            self.vbo_capacity_floats = total_floats;
+            self.ibo_capacity_indices = total_indices;
         }
 
         let stride = 9 * 4;
