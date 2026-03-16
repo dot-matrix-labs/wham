@@ -451,6 +451,113 @@ fn build_diff_image(
 }
 
 // ---------------------------------------------------------------------------
+// Interactive test session
+// ---------------------------------------------------------------------------
+
+use ui_core::{
+    accessibility::A11yTree,
+    batch::TextRun,
+    input::InputEvent,
+    types::Vec2,
+    ui::{WidgetInfo, WidgetKind},
+};
+
+/// The observable output of a single rendered frame.
+///
+/// Returned by [`Session::next_frame`]. Contains all widgets, text runs, and
+/// the accessibility tree produced by calling [`Ui::end_frame`].
+pub struct FrameResult {
+    pub widgets: Vec<WidgetInfo>,
+    pub text_runs: Vec<TextRun>,
+    /// Number of solid quads in the draw batch (vertex count / 4).
+    pub quad_count: usize,
+    pub a11y: A11yTree,
+}
+
+impl FrameResult {
+    /// Find the first widget whose label equals `label`.
+    pub fn widget(&self, label: &str) -> Option<&WidgetInfo> {
+        self.widgets.iter().find(|w| w.label == label)
+    }
+
+    /// Returns `true` if any text run's text contains `needle`.
+    pub fn has_text(&self, needle: &str) -> bool {
+        self.text_runs.iter().any(|r| r.text.contains(needle))
+    }
+
+    /// Count widgets of the given kind.
+    pub fn count_kind(&self, kind: WidgetKind) -> usize {
+        self.widgets.iter().filter(|w| w.kind == kind).count()
+    }
+}
+
+/// A persistent headless UI session. Keeps a [`Ui`] alive across multiple
+/// frames so interaction tests can simulate focus changes, typed text, and
+/// multi-step flows exactly as they occur in the browser.
+pub struct Session {
+    ui: Ui,
+    pub size: Size,
+}
+
+impl Session {
+    /// Create a new session with the default light theme.
+    pub fn new(size: Size) -> Self {
+        let theme = Theme::default_light();
+        let ui = Ui::new(size.width as f32, size.height as f32, theme);
+        Self { ui, size }
+    }
+
+    /// Create a new session with the dark theme.
+    pub fn new_dark(size: Size) -> Self {
+        let theme = Theme::dark();
+        let ui = Ui::new(size.width as f32, size.height as f32, theme);
+        Self { ui, size }
+    }
+
+    /// Run a single frame: inject events, call `build` to emit widgets, and
+    /// return the resulting [`FrameResult`].
+    pub fn next_frame(
+        &mut self,
+        events: Vec<InputEvent>,
+        time_ms: f64,
+        build: impl FnOnce(&mut Ui),
+    ) -> FrameResult {
+        let w = self.size.width as f32;
+        let h = self.size.height as f32;
+        self.ui.begin_frame(events, w, h, 1.0, time_ms);
+        build(&mut self.ui);
+        let a11y = self.ui.end_frame();
+        let widgets = self.ui.widgets().to_vec();
+        let text_runs = self.ui.batch().text_runs.clone();
+        let quad_count = self.ui.batch().vertices.len() / 4;
+        FrameResult { widgets, text_runs, quad_count, a11y }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event builder helpers
+// ---------------------------------------------------------------------------
+
+/// Build a pointer click (down then up) at the given canvas position.
+pub fn click_at(pos: Vec2) -> Vec<InputEvent> {
+    use ui_core::input::{Modifiers, PointerButton, PointerEvent};
+    let ev = PointerEvent {
+        pos,
+        button: Some(PointerButton::Left),
+        modifiers: Modifiers::default(),
+    };
+    vec![InputEvent::PointerDown(ev), InputEvent::PointerUp(ev)]
+}
+
+/// Build a [`TextInput`](InputEvent::TextInput) event for each character.
+pub fn type_text(text: &str) -> Vec<InputEvent> {
+    use ui_core::input::TextInputEvent;
+    text.chars()
+        .map(|c| InputEvent::TextInput(TextInputEvent { text: c.to_string() }))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
