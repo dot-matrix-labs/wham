@@ -1,5 +1,8 @@
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{HtmlCanvasElement, WebGl2RenderingContext as Gl, WebGlBuffer, WebGlProgram, WebGlShader, WebGlTexture};
+use web_sys::{
+    HtmlCanvasElement, WebGl2RenderingContext as Gl, WebGlBuffer, WebGlProgram, WebGlShader,
+    WebGlTexture, WebGlUniformLocation,
+};
 
 use ui_core::batch::{Batch, Material, Quad, TextRun};
 use ui_core::types::Rect;
@@ -20,6 +23,39 @@ pub struct Renderer {
     width: f32,
     height: f32,
     context_valid: bool,
+
+    // -----------------------------------------------------------------------
+    // Cached uniform and attribute locations.
+    //
+    // Uniform/attrib locations are stable for the lifetime of a linked
+    // program.  They MUST be queried once at init time (or after context
+    // restoration via `reinitialize`) and stored here.
+    //
+    // NEVER call gl.get_uniform_location() or gl.get_attrib_location() on
+    // the hot (per-frame) render path — those are string lookups into the
+    // driver's symbol table and have measurable cost.
+    //
+    // When adding a new uniform or attribute to a shader, add its cached
+    // location field here and populate it in `cache_locations()`.
+    // -----------------------------------------------------------------------
+
+    /// `u_resolution` — canvas size in pixels; set once per frame.
+    uloc_resolution: Option<WebGlUniformLocation>,
+    /// `u_material` — selects solid / text-atlas / icon-atlas mode.
+    uloc_material: Option<WebGlUniformLocation>,
+    /// `u_text_atlas` — sampler for the glyph atlas (texture unit 0).
+    uloc_text_atlas: Option<WebGlUniformLocation>,
+    /// `u_icon_atlas` — sampler for the icon atlas (texture unit 1).
+    uloc_icon_atlas: Option<WebGlUniformLocation>,
+
+    /// `a_pos` attribute index.
+    aloc_pos: u32,
+    /// `a_uv` attribute index.
+    aloc_uv: u32,
+    /// `a_color` attribute index.
+    aloc_color: u32,
+    /// `a_flags` attribute index.
+    aloc_flags: u32,
 }
 
 impl Renderer {
@@ -52,7 +88,17 @@ impl Renderer {
             width,
             height,
             context_valid: true,
+            // Populated immediately below by `cache_locations()`.
+            uloc_resolution: None,
+            uloc_material: None,
+            uloc_text_atlas: None,
+            uloc_icon_atlas: None,
+            aloc_pos: 0,
+            aloc_uv: 0,
+            aloc_color: 0,
+            aloc_flags: 0,
         };
+        renderer.cache_locations();
         renderer.init_atlas_textures();
         renderer.resize(width, height);
         Ok(renderer)
@@ -94,6 +140,9 @@ impl Renderer {
         self.gl.enable(Gl::BLEND);
         self.gl.blend_func(Gl::SRC_ALPHA, Gl::ONE_MINUS_SRC_ALPHA);
 
+        // Re-cache locations for the freshly linked program.
+        self.cache_locations();
+
         // The atlas pixel data in CPU memory is still valid; mark it dirty so
         // the full texture is re-uploaded on the next frame.
         self.atlas.invalidate_gpu_cache();
@@ -103,6 +152,27 @@ impl Renderer {
 
         self.context_valid = true;
         Ok(())
+    }
+
+    /// Query and store all uniform/attribute locations for the current program.
+    ///
+    /// Must be called once after every `link_program` (at construction and
+    /// after context restoration). All per-frame code must use the cached
+    /// values stored on `self` — never call `get_uniform_location` or
+    /// `get_attrib_location` on the hot path.
+    fn cache_locations(&mut self) {
+        let gl = &self.gl;
+        let prog = &self.program;
+
+        self.uloc_resolution = gl.get_uniform_location(prog, "u_resolution");
+        self.uloc_material   = gl.get_uniform_location(prog, "u_material");
+        self.uloc_text_atlas = gl.get_uniform_location(prog, "u_text_atlas");
+        self.uloc_icon_atlas = gl.get_uniform_location(prog, "u_icon_atlas");
+
+        self.aloc_pos   = gl.get_attrib_location(prog, "a_pos")   as u32;
+        self.aloc_uv    = gl.get_attrib_location(prog, "a_uv")    as u32;
+        self.aloc_color = gl.get_attrib_location(prog, "a_color") as u32;
+        self.aloc_flags = gl.get_attrib_location(prog, "a_flags") as u32;
     }
 
     pub fn resize(&mut self, width: f32, height: f32) {
@@ -274,22 +344,15 @@ impl Renderer {
         let gl = &self.gl;
         gl.active_texture(Gl::TEXTURE1);
         gl.bind_texture(Gl::TEXTURE_2D, Some(&self.icon_texture));
-        if let Some(loc) = gl.get_uniform_location(&self.program, "u_material") {
-            gl.uniform1i(Some(&loc), 2);
-        }
-        if let Some(loc) = gl.get_uniform_location(&self.program, "u_icon_atlas") {
-            gl.uniform1i(Some(&loc), 1);
-        }
+        gl.uniform1i(self.uloc_material.as_ref(), 2);
+        gl.uniform1i(self.uloc_icon_atlas.as_ref(), 1);
     }
 
     fn draw_batch(&mut self, batch: &Batch) -> Result<(), JsValue> {
         let gl = &self.gl;
         gl.use_program(Some(&self.program));
 
-        let u_resolution = gl.get_uniform_location(&self.program, "u_resolution");
-        if let Some(loc) = u_resolution {
-            gl.uniform2f(Some(&loc), self.width, self.height);
-        }
+        gl.uniform2f(self.uloc_resolution.as_ref(), self.width, self.height);
 
         let mut vertex_data: Vec<f32> = Vec::with_capacity(batch.vertices.len() * 9);
         for v in &batch.vertices {
@@ -317,22 +380,17 @@ impl Renderer {
         }
 
         let stride = 9 * 4;
-        let a_pos = gl.get_attrib_location(&self.program, "a_pos") as u32;
-        let a_uv = gl.get_attrib_location(&self.program, "a_uv") as u32;
-        let a_color = gl.get_attrib_location(&self.program, "a_color") as u32;
-        let a_flags = gl.get_attrib_location(&self.program, "a_flags") as u32;
+        gl.enable_vertex_attrib_array(self.aloc_pos);
+        gl.vertex_attrib_pointer_with_i32(self.aloc_pos, 2, Gl::FLOAT, false, stride, 0);
 
-        gl.enable_vertex_attrib_array(a_pos);
-        gl.vertex_attrib_pointer_with_i32(a_pos, 2, Gl::FLOAT, false, stride, 0);
+        gl.enable_vertex_attrib_array(self.aloc_uv);
+        gl.vertex_attrib_pointer_with_i32(self.aloc_uv, 2, Gl::FLOAT, false, stride, 2 * 4);
 
-        gl.enable_vertex_attrib_array(a_uv);
-        gl.vertex_attrib_pointer_with_i32(a_uv, 2, Gl::FLOAT, false, stride, 2 * 4);
+        gl.enable_vertex_attrib_array(self.aloc_color);
+        gl.vertex_attrib_pointer_with_i32(self.aloc_color, 4, Gl::FLOAT, false, stride, 4 * 4);
 
-        gl.enable_vertex_attrib_array(a_color);
-        gl.vertex_attrib_pointer_with_i32(a_color, 4, Gl::FLOAT, false, stride, 4 * 4);
-
-        gl.enable_vertex_attrib_array(a_flags);
-        gl.vertex_attrib_pointer_with_i32(a_flags, 1, Gl::FLOAT, false, stride, 8 * 4);
+        gl.enable_vertex_attrib_array(self.aloc_flags);
+        gl.vertex_attrib_pointer_with_i32(self.aloc_flags, 1, Gl::FLOAT, false, stride, 8 * 4);
 
         gl.clear_color(0.97, 0.97, 0.96, 1.0);
         gl.clear(Gl::COLOR_BUFFER_BIT);
@@ -374,21 +432,15 @@ impl Renderer {
         if let Some(tex) = self.atlas_textures.get(page_idx) {
             gl.bind_texture(Gl::TEXTURE_2D, Some(tex));
         }
-        if let Some(loc) = gl.get_uniform_location(&self.program, "u_material") {
-            gl.uniform1i(Some(&loc), 1);
-        }
-        if let Some(loc) = gl.get_uniform_location(&self.program, "u_text_atlas") {
-            gl.uniform1i(Some(&loc), 0);
-        }
+        gl.uniform1i(self.uloc_material.as_ref(), 1);
+        gl.uniform1i(self.uloc_text_atlas.as_ref(), 0);
     }
 
     fn unbind_text_texture(&self) {
         let gl = &self.gl;
         gl.active_texture(Gl::TEXTURE0);
         gl.bind_texture(Gl::TEXTURE_2D, None);
-        if let Some(loc) = gl.get_uniform_location(&self.program, "u_material") {
-            gl.uniform1i(Some(&loc), 0);
-        }
+        gl.uniform1i(self.uloc_material.as_ref(), 0);
     }
 }
 
