@@ -263,14 +263,16 @@ _(Tasks as defined in plan.md — autofill integration, cross-browser testing, p
 
 **Goal:** Prove the library works for real downstream use cases by running realistic full-form scenarios in a headless software renderer, without a browser or WebGL.
 
-| Task | Issue | Effort | Depends On |
-|---|---|---|---|
-| `Session` harness + `FrameResult` in `wham-test` | [#120](https://github.com/dot-matrix-labs/wham/issues/120) | S | — |
-| Sign-in form headless scenario (email, password, button) | [#120](https://github.com/dot-matrix-labs/wham/issues/120) | S | Session harness |
-| Checkout form headless scenario (multi-column, select, button) | [#121](https://github.com/dot-matrix-labs/wham/issues/121) | S | — |
-| Notification settings scenario (icons, checkboxes, radio, button) | [#122](https://github.com/dot-matrix-labs/wham/issues/122) | S | — |
+| Task | Issue | Effort | Depends On | Status |
+|---|---|---|---|---|
+| `Session` harness + `FrameResult` in `wham-test` | [#120](https://github.com/dot-matrix-labs/wham/issues/120) | S | — | ✅ Done (PR #123) |
+| Sign-in form headless scenario (email, password, button) | [#120](https://github.com/dot-matrix-labs/wham/issues/120) | S | Session harness | ✅ Done (PR #123) |
+| Checkout form headless scenario (multi-column, select, button) | [#121](https://github.com/dot-matrix-labs/wham/issues/121) | S | — | ✅ Done (PR #124) |
+| Notification settings scenario (icons, checkboxes, radio, button) | [#122](https://github.com/dot-matrix-labs/wham/issues/122) | S | — | ✅ Done (PR #125) |
+| Real glyph rendering in headless software rasterizer (fontdue) | [#126](https://github.com/dot-matrix-labs/wham/issues/126) | M | — | ✅ Done (PR #128) |
+| CI `screenshots` job with artifact upload | [#127](https://github.com/dot-matrix-labs/wham/issues/127) | S | #126 | ✅ Done (PR #129) |
 
-These tests run with `cargo test -p wham-test` and require no browser. They serve as living documentation for downstream consumers of the library.
+These tests run with `cargo test -p wham-test` and require no browser. They serve as living documentation for downstream consumers of the library. Screenshots of every form scenario are uploaded as CI artifacts on every push.
 
 ### Phase Dependencies
 
