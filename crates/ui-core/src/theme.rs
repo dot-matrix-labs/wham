@@ -4,6 +4,7 @@ use crate::types::Color;
 pub struct Theme {
     pub font_scale: f32,
     pub high_contrast: bool,
+    pub reduced_motion: bool,
     pub colors: ThemeColors,
 }
 
@@ -16,6 +17,7 @@ pub struct ThemeColors {
     pub primary: Color,
     pub error: Color,
     pub success: Color,
+    pub focus_ring: Color,
 }
 
 impl Theme {
@@ -23,6 +25,7 @@ impl Theme {
         Self {
             font_scale: 1.0,
             high_contrast: false,
+            reduced_motion: false,
             colors: ThemeColors {
                 background: Color::rgba(0.97, 0.97, 0.96, 1.0),
                 surface: Color::rgba(1.0, 1.0, 1.0, 1.0),
@@ -31,6 +34,7 @@ impl Theme {
                 primary: Color::rgba(0.2, 0.45, 0.9, 1.0),
                 error: Color::rgba(0.88, 0.2, 0.2, 1.0),
                 success: Color::rgba(0.2, 0.7, 0.3, 1.0),
+                focus_ring: Color::rgba(0.2, 0.45, 0.9, 0.8),
             },
         }
     }

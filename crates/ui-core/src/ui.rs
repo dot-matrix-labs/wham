@@ -392,6 +392,7 @@ impl Ui {
 
     pub fn end_frame(&mut self) -> A11yTree {
         self.handle_keyboard_navigation();
+        self.draw_focus_ring();
         for widget in &self.widgets {
             self.hit_test.insert(HitTestEntry {
                 id: widget.id,
@@ -421,6 +422,84 @@ impl Ui {
                     .collect(),
             },
         }
+    }
+
+    fn draw_focus_ring(&mut self) {
+        let focused_id = match self.focused {
+            Some(id) => id,
+            None => return,
+        };
+        let rect = match self.widgets.iter().find(|w| w.id == focused_id) {
+            Some(w) => w.rect,
+            None => return,
+        };
+
+        let thickness = if self.theme.high_contrast { 3.0 } else { 2.0 };
+        let offset = thickness;
+
+        let color = if self.theme.high_contrast {
+            // High-contrast: fully opaque, high-visibility color
+            Color::rgba(0.0, 0.0, 0.0, 1.0)
+        } else if self.theme.reduced_motion {
+            self.theme.colors.focus_ring
+        } else {
+            // Subtle pulse animation
+            let phase = (self.time_ms / 1000.0 * std::f64::consts::PI).sin() as f32;
+            let alpha = 0.6 + 0.3 * phase;
+            Color::rgba(
+                self.theme.colors.focus_ring.r,
+                self.theme.colors.focus_ring.g,
+                self.theme.colors.focus_ring.b,
+                alpha,
+            )
+        };
+
+        let t = thickness;
+        let o = offset;
+        // Top edge
+        self.batch.push_quad(
+            Quad {
+                rect: Rect::new(rect.x - o, rect.y - o, rect.w + 2.0 * o, t),
+                uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+                color,
+                flags: 0,
+            },
+            Material::Solid,
+            None,
+        );
+        // Bottom edge
+        self.batch.push_quad(
+            Quad {
+                rect: Rect::new(rect.x - o, rect.y + rect.h + o - t, rect.w + 2.0 * o, t),
+                uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+                color,
+                flags: 0,
+            },
+            Material::Solid,
+            None,
+        );
+        // Left edge
+        self.batch.push_quad(
+            Quad {
+                rect: Rect::new(rect.x - o, rect.y - o + t, t, rect.h + 2.0 * o - 2.0 * t),
+                uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+                color,
+                flags: 0,
+            },
+            Material::Solid,
+            None,
+        );
+        // Right edge
+        self.batch.push_quad(
+            Quad {
+                rect: Rect::new(rect.x + rect.w + o - t, rect.y - o + t, t, rect.h + 2.0 * o - 2.0 * t),
+                uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+                color,
+                flags: 0,
+            },
+            Material::Solid,
+            None,
+        );
     }
 
     fn handle_keyboard_navigation(&mut self) {
@@ -1979,5 +2058,81 @@ mod tests {
         // Click way past end -> index 2 (clamped)
         let idx = ui.position_to_index(rect, &buf, Vec2::new(padding + 100.0, 5.0));
         assert_eq!(idx, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Focus ring rendering
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn focus_ring_drawn_when_widget_focused() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.button("Click me");
+        let btn_id = ui.widgets[0].id;
+        ui.focused = Some(btn_id);
+        let verts_before = ui.batch.vertices.len();
+        ui.end_frame();
+        // 4 quads × 4 vertices = 16 new vertices for the focus ring
+        assert_eq!(ui.batch.vertices.len() - verts_before, 16);
+    }
+
+    #[test]
+    fn no_focus_ring_when_nothing_focused() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.button("Click me");
+        ui.focused = None;
+        let verts_before = ui.batch.vertices.len();
+        ui.end_frame();
+        assert_eq!(ui.batch.vertices.len(), verts_before);
+    }
+
+    #[test]
+    fn focus_ring_high_contrast_uses_3px_thickness() {
+        let mut theme = Theme::default_light();
+        theme.high_contrast = true;
+        let mut ui = Ui::new(800.0, 600.0, theme);
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.button("OK");
+        let btn_id = ui.widgets[0].id;
+        ui.focused = Some(btn_id);
+        ui.end_frame();
+        // The top edge quad should have height 3.0 (high contrast thickness)
+        let ring_quad_start = ui.batch.vertices.len() - 16;
+        let tl = &ui.batch.vertices[ring_quad_start];
+        let br = &ui.batch.vertices[ring_quad_start + 2];
+        let thickness = br.pos.y - tl.pos.y;
+        assert!((thickness - 3.0).abs() < 0.01, "Expected 3px thickness, got {}", thickness);
+    }
+
+    #[test]
+    fn focus_ring_moves_with_focus_change() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.button("A");
+        ui.button("B");
+        let id_a = ui.widgets[0].id;
+        let rect_a = ui.widgets[0].rect;
+        let id_b = ui.widgets[1].id;
+        let rect_b = ui.widgets[1].rect;
+
+        // Focus on A
+        ui.focused = Some(id_a);
+        ui.end_frame();
+        // Top-left of first ring quad should be near rect_a
+        let ring_start = ui.batch.vertices.len() - 16;
+        let ring_y = ui.batch.vertices[ring_start].pos.y;
+        assert!((ring_y - (rect_a.y - 2.0)).abs() < 0.01);
+
+        // New frame, focus on B
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.button("A");
+        ui.button("B");
+        ui.focused = Some(id_b);
+        ui.end_frame();
+        let ring_start = ui.batch.vertices.len() - 16;
+        let ring_y = ui.batch.vertices[ring_start].pos.y;
+        assert!((ring_y - (rect_b.y - 2.0)).abs() < 0.01);
     }
 }
