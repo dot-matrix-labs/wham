@@ -808,6 +808,14 @@ async function main() {
   const app = new WasmApp(canvas, canvas.width, canvas.height, dpr);
   window.__app = app;
 
+  // Scenario routing — read ?scenario= query param and switch the active form.
+  // Supported values: sign-in, checkout, notifications, dynamic, nested.
+  // With no param the default demo (Login/Register) is shown.
+  const scenario = new URLSearchParams(window.location.search).get("scenario");
+  if (scenario) {
+    app.set_scenario(scenario);
+  }
+
   // Expose last frame time on window so external tooling or WASM can read it.
   Object.defineProperty(window, "__whamLastFrameMs", {
     get: () => lastFrameTimeMs,

@@ -247,4 +247,14 @@ impl WasmApp {
     pub fn list_autofill_fields(&self) -> JsValue {
         self.runtime.list_autofill_fields()
     }
+
+    /// Switch the active scenario by name.
+    ///
+    /// Called from the host page after reading the `?scenario=` query
+    /// parameter.  Recognised values: `"sign-in"`, `"checkout"`,
+    /// `"notifications"`, `"dynamic"`, `"nested"`.  Any other value (or no
+    /// value) leaves the app in its default mode.
+    pub fn set_scenario(&mut self, scenario: &str) {
+        self.runtime.app_mut().set_scenario(scenario);
+    }
 }

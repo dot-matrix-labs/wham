@@ -65,6 +65,11 @@ impl<A: FormApp> WasmRuntime<A> {
         })
     }
 
+    /// Return a mutable reference to the application.
+    pub fn app_mut(&mut self) -> &mut A {
+        &mut self.app
+    }
+
     /// Run one frame: begin, build UI, end, resolve text, render.
     ///
     /// Returns the accessibility tree as a `JsValue` for the a11y mirror.
