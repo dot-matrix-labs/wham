@@ -335,6 +335,16 @@ impl TextAtlas {
         &self.pages[page_idx].pixels
     }
 
+    /// Returns a snapshot of all cached glyph advance widths, keyed by
+    /// `(char, quantized_font_size)`. Used to populate `Ui::set_char_advance`
+    /// so that platform-agnostic caret placement can use real metrics.
+    pub fn advance_map(&self) -> HashMap<(char, u16), f32> {
+        self.glyphs
+            .iter()
+            .map(|(k, g)| (*k, g.advance))
+            .collect()
+    }
+
     /// Returns the pixel data for the first page (backwards compatibility).
     pub fn pixels(&self) -> &[u8] {
         &self.pages[0].pixels

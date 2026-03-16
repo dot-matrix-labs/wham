@@ -235,6 +235,11 @@ pub struct Ui {
     /// `text_input_for` / `text_input_masked_for` to eliminate manual
     /// buffer management.
     form_buffers: HashMap<FormPath, TextBuffer>,
+    /// Returns the advance width (in pixels) for a character at a given font
+    /// size. The default implementation returns `font_size * 0.6` (the old
+    /// monospace approximation). The wasm layer replaces this with a closure
+    /// that queries the glyph atlas for actual advance widths.
+    char_advance: Box<dyn Fn(char, f32) -> f32>,
 }
 
 impl Ui {
@@ -261,6 +266,7 @@ impl Ui {
             overwrite_mode: false,
             id_stack: Vec::new(),
             form_buffers: HashMap::new(),
+            char_advance: Box::new(|_ch, font_size| font_size * 0.6),
         }
     }
 
@@ -277,6 +283,35 @@ impl Ui {
     /// customization (e.g. switching to dark mode).
     pub fn theme_mut(&mut self) -> &mut Theme {
         &mut self.theme
+    }
+
+    /// Set the character advance function used for caret placement and
+    /// click-to-position mapping. The function receives a character and a
+    /// font size (in pixels) and must return the advance width in pixels.
+    ///
+    /// The default uses `font_size * 0.6` (monospace approximation). The wasm
+    /// layer should replace this with a closure that queries the glyph atlas
+    /// for actual proportional advance widths.
+    pub fn set_char_advance(&mut self, f: Box<dyn Fn(char, f32) -> f32>) {
+        self.char_advance = f;
+    }
+
+    /// Compute the advance-width prefix sum for each grapheme in `text`.
+    /// Returns a Vec of length `n+1` where `n` is the number of graphemes:
+    /// `result[0] = 0.0` and `result[i]` is the x-offset of the caret
+    /// positioned after the i-th grapheme.
+    fn grapheme_prefix_sums(&self, text: &str, font_size: f32) -> Vec<f32> {
+        let graphemes: Vec<&str> = text.graphemes(true).collect();
+        let mut sums = Vec::with_capacity(graphemes.len() + 1);
+        sums.push(0.0);
+        let mut acc = 0.0f32;
+        for g in &graphemes {
+            for ch in g.chars() {
+                acc += (self.char_advance)(ch, font_size);
+            }
+            sums.push(acc);
+        }
+        sums
     }
 
     /// Returns a reference to the current rendering batch.
@@ -1161,13 +1196,18 @@ impl Ui {
         let x = (pos.x - rect.x - padding).max(0.0);
         let y = (pos.y - rect.y - padding).max(0.0);
         let line = (y / line_height).floor() as usize;
-        let char_width = font_size * 0.6;
-        let col = (x / char_width).floor() as usize;
         let mut index = 0usize;
         for (line_idx, line_text) in buffer.text().split('\n').enumerate() {
             let graphemes = line_text.graphemes(true).count();
             if line_idx == line {
-                index += col.min(graphemes);
+                // Use prefix sums to find which grapheme boundary the click
+                // falls closest to (midpoint rounding).
+                let sums = self.grapheme_prefix_sums(line_text, font_size);
+                let col = sums
+                    .windows(2)
+                    .position(|w| x < w[0] + (w[1] - w[0]) * 0.5)
+                    .unwrap_or(graphemes);
+                index += col;
                 return index;
             }
             index += graphemes + 1;
@@ -1179,12 +1219,12 @@ impl Ui {
         let padding = 8.0;
         let font_size = 15.0 * self.theme.font_scale * self.scale;
         let line_height = font_size * 1.4;
-        let char_width = font_size * 0.6;
         let mut remaining = index;
         for (line, line_text) in buffer.text().split('\n').enumerate() {
             let graphemes = line_text.graphemes(true).count();
             if remaining <= graphemes {
-                let x = rect.x + padding + remaining as f32 * char_width;
+                let sums = self.grapheme_prefix_sums(line_text, font_size);
+                let x = rect.x + padding + sums[remaining];
                 let y = rect.y + padding + line as f32 * line_height;
                 return Vec2::new(x, y);
             }
@@ -1200,17 +1240,14 @@ impl Ui {
         };
         let font_size = 15.0 * self.theme.font_scale * self.scale;
         let line_height = font_size * 1.4;
-        let char_width = font_size * 0.6;
         let padding = 8.0;
         let lines: Vec<&str> = buffer.text().split('\n').collect();
         let (start_line, start_col) = self.index_to_line_col(&lines, selection.start);
         let (end_line, end_col) = self.index_to_line_col(&lines, selection.end);
 
         for line in start_line..=end_line {
-            let line_len = lines
-                .get(line)
-                .map(|text| text.graphemes(true).count())
-                .unwrap_or(0);
+            let line_text = lines.get(line).copied().unwrap_or("");
+            let line_len = line_text.graphemes(true).count();
             let (col_start, col_end) = if line == start_line && line == end_line {
                 (start_col, end_col)
             } else if line == start_line {
@@ -1223,9 +1260,10 @@ impl Ui {
             if col_start == col_end {
                 continue;
             }
-            let x = rect.x + padding + col_start as f32 * char_width;
+            let sums = self.grapheme_prefix_sums(line_text, font_size);
+            let x = rect.x + padding + sums[col_start];
             let y = rect.y + padding + line as f32 * line_height;
-            let w = (col_end as f32 - col_start as f32) * char_width;
+            let w = sums[col_end] - sums[col_start];
             let sel_rect = Rect::new(x, y, w, line_height);
             self.batch.push_quad(
                 Quad {
@@ -1744,7 +1782,6 @@ mod tests {
         assert_eq!(run.text, "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}");
     }
 
-    // -----------------------------------------------------------------------
     // Horizontal layout (begin_row / end_row)
     // -----------------------------------------------------------------------
 
@@ -1851,5 +1888,96 @@ mod tests {
         assert!(r2.x > r1.x);
         let expected_w = (200.0 - 10.0) / 2.0;
         assert!((r1.w - expected_w).abs() < 0.01);
+    }
+
+    // -----------------------------------------------------------------------
+    // Proportional text metrics
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_char_advance_matches_legacy() {
+        let ui = test_ui();
+        // Default fallback: font_size * 0.6
+        let font_size = 15.0;
+        let sums = ui.grapheme_prefix_sums("abc", font_size);
+        let expected_cw = font_size * 0.6;
+        assert_eq!(sums.len(), 4); // 3 graphemes + leading 0
+        assert!((sums[0]).abs() < f32::EPSILON);
+        assert!((sums[1] - expected_cw).abs() < f32::EPSILON);
+        assert!((sums[2] - expected_cw * 2.0).abs() < f32::EPSILON);
+        assert!((sums[3] - expected_cw * 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn custom_char_advance_proportional() {
+        let mut ui = test_ui();
+        // 'i' = 4px, 'W' = 12px at font_size 16
+        ui.set_char_advance(Box::new(|ch, _fs| match ch {
+            'i' => 4.0,
+            'W' => 12.0,
+            _ => 8.0,
+        }));
+        let sums = ui.grapheme_prefix_sums("Wi", 16.0);
+        assert_eq!(sums.len(), 3);
+        assert!((sums[0]).abs() < f32::EPSILON);
+        assert!((sums[1] - 12.0).abs() < f32::EPSILON); // after 'W'
+        assert!((sums[2] - 16.0).abs() < f32::EPSILON); // after 'i'
+    }
+
+    #[test]
+    fn index_to_position_uses_proportional_advance() {
+        let mut ui = test_ui();
+        ui.set_char_advance(Box::new(|ch, _fs| match ch {
+            'i' => 4.0,
+            'W' => 12.0,
+            _ => 8.0,
+        }));
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        let buf = TextBuffer::new("Wi");
+        let rect = Rect::new(0.0, 0.0, 200.0, 30.0);
+        let padding = 8.0;
+
+        let pos0 = ui.index_to_position(rect, &buf, 0, false);
+        assert!((pos0.x - padding).abs() < f32::EPSILON);
+
+        let pos1 = ui.index_to_position(rect, &buf, 1, false);
+        assert!((pos1.x - (padding + 12.0)).abs() < f32::EPSILON); // after 'W'
+
+        let pos2 = ui.index_to_position(rect, &buf, 2, false);
+        assert!((pos2.x - (padding + 16.0)).abs() < f32::EPSILON); // after 'Wi'
+    }
+
+    #[test]
+    fn position_to_index_uses_proportional_advance() {
+        let mut ui = test_ui();
+        ui.set_char_advance(Box::new(|ch, _fs| match ch {
+            'i' => 4.0,
+            'W' => 12.0,
+            _ => 8.0,
+        }));
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        let buf = TextBuffer::new("Wi");
+        let rect = Rect::new(0.0, 0.0, 200.0, 30.0);
+        let padding = 8.0;
+
+        // Click in the middle of 'W' (x=6 within text) -> index 0
+        let idx = ui.position_to_index(rect, &buf, Vec2::new(padding + 5.0, 5.0));
+        assert_eq!(idx, 0);
+
+        // Click past the midpoint of 'W' (x > 6) -> index 1
+        let idx = ui.position_to_index(rect, &buf, Vec2::new(padding + 7.0, 5.0));
+        assert_eq!(idx, 1);
+
+        // Click in the middle of 'i' (at x = 12 + 2 = 14 within text) -> index 1
+        let idx = ui.position_to_index(rect, &buf, Vec2::new(padding + 13.0, 5.0));
+        assert_eq!(idx, 1);
+
+        // Click past 'i' midpoint (x > 14 within text) -> index 2
+        let idx = ui.position_to_index(rect, &buf, Vec2::new(padding + 15.0, 5.0));
+        assert_eq!(idx, 2);
+
+        // Click way past end -> index 2 (clamped)
+        let idx = ui.position_to_index(rect, &buf, Vec2::new(padding + 100.0, 5.0));
+        assert_eq!(idx, 2);
     }
 }

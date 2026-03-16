@@ -11,6 +11,11 @@ use ui_core::theme::Theme;
 use ui_core::types::Vec2;
 use ui_core::ui::{Ui, WidgetKind};
 
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
+
+use crate::atlas::quantize_font_size;
 use crate::renderer::{resolve_text_runs, Renderer};
 
 /// A reusable runtime that drives any `FormApp` implementation in the browser.
@@ -78,6 +83,20 @@ impl<A: FormApp> WasmRuntime<A> {
         // BEFORE the render pass, so the renderer receives a complete batch.
         self.renderer.atlas_mut().begin_frame();
         resolve_text_runs(&mut batch, self.renderer.atlas_mut());
+
+        // Feed actual glyph advance widths back into Ui so that caret
+        // placement and click-to-position use real metrics next frame.
+        let advances: Rc<RefCell<HashMap<(char, u16), f32>>> =
+            Rc::new(RefCell::new(self.renderer.atlas_mut().advance_map()));
+        self.ui.set_char_advance(Box::new(move |ch, font_size| {
+            let key = (ch, quantize_font_size(font_size));
+            advances
+                .borrow()
+                .get(&key)
+                .copied()
+                .unwrap_or(font_size * 0.6)
+        }));
+
         self.renderer.render(&batch)?;
 
         let serializer =
