@@ -64,6 +64,37 @@ pub struct Renderer {
     vbo_capacity_floats: usize,
     /// Number of u32 indices currently allocated in the IBO on the GPU.
     ibo_capacity_indices: usize,
+
+    // -----------------------------------------------------------------------
+    // Instanced rendering resources.
+    //
+    // Repeated solid primitives (e.g. a column of buttons or text inputs that
+    // share the same size) are drawn with a single `drawElementsInstanced`
+    // call.  A unit quad (one 1×1 quad at the origin) is uploaded once;
+    // per-instance attributes carry the rect and color offset for each
+    // primitive.
+    //
+    // Minimum number of quads in a DrawCmd before the instanced path is
+    // chosen over the regular per-vertex path.
+    // -----------------------------------------------------------------------
+
+    /// Shader program for instanced solid-quad drawing.
+    inst_program: WebGlProgram,
+    /// Per-instance attribute buffer: [x, y, w, h, r, g, b, a] × N instances.
+    inst_attr_vbo: WebGlBuffer,
+    /// Unit quad vertex buffer (four corners of a 0..1 × 0..1 quad).
+    unit_quad_vbo: WebGlBuffer,
+    /// Unit quad index buffer (two triangles: 0,1,2 / 0,2,3).
+    unit_quad_ibo: WebGlBuffer,
+
+    /// Cached `u_resolution` location in the instanced program.
+    inst_uloc_resolution: Option<WebGlUniformLocation>,
+    /// Cached `a_local_pos` location in the instanced program.
+    inst_aloc_local_pos: u32,
+    /// Cached `a_inst_rect` location in the instanced program.
+    inst_aloc_inst_rect: u32,
+    /// Cached `a_inst_color` location in the instanced program.
+    inst_aloc_inst_color: u32,
 }
 
 impl Renderer {
@@ -74,6 +105,8 @@ impl Renderer {
             .dyn_into()?;
 
         let (program, vbo, ibo) = create_gpu_resources(&gl)?;
+        let (inst_program, inst_attr_vbo, unit_quad_vbo, unit_quad_ibo) =
+            create_instanced_resources(&gl)?;
 
         gl.use_program(Some(&program));
         gl.enable(Gl::BLEND);
@@ -107,6 +140,14 @@ impl Renderer {
             aloc_flags: 0,
             vbo_capacity_floats: 0,
             ibo_capacity_indices: 0,
+            inst_program,
+            inst_attr_vbo,
+            unit_quad_vbo,
+            unit_quad_ibo,
+            inst_uloc_resolution: None,
+            inst_aloc_local_pos: 0,
+            inst_aloc_inst_rect: 0,
+            inst_aloc_inst_color: 0,
         };
         renderer.cache_locations();
         renderer.init_atlas_textures();
@@ -133,10 +174,16 @@ impl Renderer {
     /// the glyph atlas.
     pub fn reinitialize(&mut self) -> Result<(), JsValue> {
         let (program, vbo, ibo) = create_gpu_resources(&self.gl)?;
+        let (inst_program, inst_attr_vbo, unit_quad_vbo, unit_quad_ibo) =
+            create_instanced_resources(&self.gl)?;
 
         self.program = program;
         self.vbo = vbo;
         self.ibo = ibo;
+        self.inst_program = inst_program;
+        self.inst_attr_vbo = inst_attr_vbo;
+        self.unit_quad_vbo = unit_quad_vbo;
+        self.unit_quad_ibo = unit_quad_ibo;
 
         // Recreate textures for all atlas pages.
         self.atlas_textures.clear();
@@ -187,6 +234,13 @@ impl Renderer {
         self.aloc_uv    = gl.get_attrib_location(prog, "a_uv")    as u32;
         self.aloc_color = gl.get_attrib_location(prog, "a_color") as u32;
         self.aloc_flags = gl.get_attrib_location(prog, "a_flags") as u32;
+
+        // Instanced program locations.
+        let inst_prog = &self.inst_program;
+        self.inst_uloc_resolution = gl.get_uniform_location(inst_prog, "u_resolution");
+        self.inst_aloc_local_pos  = gl.get_attrib_location(inst_prog, "a_local_pos")  as u32;
+        self.inst_aloc_inst_rect  = gl.get_attrib_location(inst_prog, "a_inst_rect")  as u32;
+        self.inst_aloc_inst_color = gl.get_attrib_location(inst_prog, "a_inst_color") as u32;
     }
 
     pub fn resize(&mut self, width: f32, height: f32) {
@@ -501,43 +555,78 @@ impl Renderer {
             self.ibo_capacity_indices = total_indices;
         }
 
-        let stride = 9 * 4;
-        gl.enable_vertex_attrib_array(self.aloc_pos);
-        gl.vertex_attrib_pointer_with_i32(self.aloc_pos, 2, Gl::FLOAT, false, stride, 0);
+        {
+            // Scoped borrow of self.gl so it's dropped before the command
+            // loop, which may call self.draw_instanced_solid (a &mut self
+            // method).
+            let gl = &self.gl;
+            let stride = 9 * 4;
+            gl.enable_vertex_attrib_array(self.aloc_pos);
+            gl.vertex_attrib_pointer_with_i32(self.aloc_pos, 2, Gl::FLOAT, false, stride, 0);
 
-        gl.enable_vertex_attrib_array(self.aloc_uv);
-        gl.vertex_attrib_pointer_with_i32(self.aloc_uv, 2, Gl::FLOAT, false, stride, 2 * 4);
+            gl.enable_vertex_attrib_array(self.aloc_uv);
+            gl.vertex_attrib_pointer_with_i32(self.aloc_uv, 2, Gl::FLOAT, false, stride, 2 * 4);
 
-        gl.enable_vertex_attrib_array(self.aloc_color);
-        gl.vertex_attrib_pointer_with_i32(self.aloc_color, 4, Gl::FLOAT, false, stride, 4 * 4);
+            gl.enable_vertex_attrib_array(self.aloc_color);
+            gl.vertex_attrib_pointer_with_i32(self.aloc_color, 4, Gl::FLOAT, false, stride, 4 * 4);
 
-        gl.enable_vertex_attrib_array(self.aloc_flags);
-        gl.vertex_attrib_pointer_with_i32(self.aloc_flags, 1, Gl::FLOAT, false, stride, 8 * 4);
+            gl.enable_vertex_attrib_array(self.aloc_flags);
+            gl.vertex_attrib_pointer_with_i32(self.aloc_flags, 1, Gl::FLOAT, false, stride, 8 * 4);
 
-        gl.clear_color(0.97, 0.97, 0.96, 1.0);
-        gl.clear(Gl::COLOR_BUFFER_BIT);
+            gl.clear_color(0.97, 0.97, 0.96, 1.0);
+            gl.clear(Gl::COLOR_BUFFER_BIT);
+        }
 
-        for cmd in &batch.commands {
+        // Minimum number of quads (each quad = 6 indices) in a solid DrawCmd
+        // before switching to the instanced path.
+        const INSTANCED_THRESHOLD_QUADS: u32 = 4;
+
+        // Pre-collect commands to avoid borrow issues inside the loop.
+        let commands: Vec<_> = batch.commands.iter().cloned().collect();
+        let vertices = batch.vertices.clone();
+        let indices = batch.indices.clone();
+
+        for cmd in &commands {
+            // Solid commands with enough quads and no clip use instanced drawing.
+            if cmd.material == Material::Solid
+                && cmd.clip.is_none()
+                && cmd.count >= INSTANCED_THRESHOLD_QUADS * 6
+            {
+                self.draw_instanced_solid(cmd, &vertices, &indices);
+                // Restore main program and main VBO/IBO bindings after instanced draw.
+                let gl = &self.gl;
+                gl.use_program(Some(&self.program));
+                gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.vbo));
+                gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&self.ibo));
+                continue;
+            }
+
+            {
+                let gl = &self.gl;
+                match cmd.material {
+                    Material::TextAtlas => {}
+                    Material::IconAtlas => {}
+                    _ => {}
+                }
+                if let Some(clip) = cmd.clip {
+                    gl.enable(Gl::SCISSOR_TEST);
+                    gl.scissor(
+                        clip.x as i32,
+                        (self.height - clip.y - clip.h) as i32,
+                        clip.w as i32,
+                        clip.h as i32,
+                    );
+                } else {
+                    gl.disable(Gl::SCISSOR_TEST);
+                }
+            }
             match cmd.material {
                 Material::TextAtlas => self.bind_text_texture(0),
                 Material::IconAtlas => self.bind_icon_texture(),
                 Material::Solid => self.unbind_text_texture(),
                 _ => self.unbind_text_texture(),
             }
-
-            if let Some(clip) = cmd.clip {
-                gl.enable(Gl::SCISSOR_TEST);
-                gl.scissor(
-                    clip.x as i32,
-                    (self.height - clip.y - clip.h) as i32,
-                    clip.w as i32,
-                    clip.h as i32,
-                );
-            } else {
-                gl.disable(Gl::SCISSOR_TEST);
-            }
-
-            gl.draw_elements_with_i32(
+            self.gl.draw_elements_with_i32(
                 Gl::TRIANGLES,
                 cmd.count as i32,
                 Gl::UNSIGNED_INT,
@@ -545,7 +634,139 @@ impl Renderer {
             );
         }
 
+        // Ensure scissor test is off after the loop.
+        self.gl.disable(Gl::SCISSOR_TEST);
+
         Ok(())
+    }
+
+    /// Draw a solid DrawCmd using WebGL2 instanced rendering.
+    ///
+    /// Each group of 6 indices in the command maps to one quad.  The quad's
+    /// position, size, and color are extracted from the vertex buffer and
+    /// uploaded as per-instance attributes.  A unit quad (0..1 × 0..1) is
+    /// then drawn `N` times — once per instance — with the instanced shader
+    /// transforming each unit quad into the correct screen-space rect.
+    ///
+    /// This reduces the number of draw calls to 1 regardless of how many
+    /// quads the command contains, and eliminates the per-vertex attribute
+    /// fetches for the duplicated corner positions.
+    fn draw_instanced_solid(
+        &mut self,
+        cmd: &ui_core::batch::DrawCmd,
+        vertices: &[ui_core::batch::Vertex],
+        indices: &[u32],
+    ) {
+        // Decode per-quad rects + colors from the interleaved vertex buffer.
+        // Each quad occupies 4 consecutive vertices (top-left, top-right,
+        // bottom-right, bottom-left).  We reconstruct rect from TL + BR.
+        let num_quads = (cmd.count / 6) as usize;
+        let mut inst_data: Vec<f32> = Vec::with_capacity(num_quads * 8);
+
+        // Walk the index buffer in groups of 6.
+        let idx_start = cmd.start as usize;
+        for q in 0..num_quads {
+            let base_idx = idx_start + q * 6;
+            if base_idx + 5 >= indices.len() {
+                break;
+            }
+            // Indices for this quad: [v0, v1, v2, v0, v2, v3]
+            let i0 = indices[base_idx] as usize;
+            let i2 = indices[base_idx + 2] as usize;
+            if i0 >= vertices.len() || i2 >= vertices.len() {
+                break;
+            }
+            let tl = &vertices[i0]; // top-left
+            let br = &vertices[i2]; // bottom-right
+            let x = tl.pos.x;
+            let y = tl.pos.y;
+            let w = br.pos.x - tl.pos.x;
+            let h = br.pos.y - tl.pos.y;
+            inst_data.push(x);
+            inst_data.push(y);
+            inst_data.push(w);
+            inst_data.push(h);
+            inst_data.push(tl.color.r);
+            inst_data.push(tl.color.g);
+            inst_data.push(tl.color.b);
+            inst_data.push(tl.color.a);
+        }
+
+        let actual_quads = inst_data.len() / 8;
+        if actual_quads == 0 {
+            return;
+        }
+
+        let gl = &self.gl;
+        gl.disable(Gl::SCISSOR_TEST);
+
+        // Upload per-instance data.
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.inst_attr_vbo));
+        unsafe {
+            let arr = js_sys::Float32Array::view(&inst_data);
+            gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &arr, Gl::DYNAMIC_DRAW);
+        }
+
+        // Switch to the instanced program.
+        gl.use_program(Some(&self.inst_program));
+        gl.uniform2f(self.inst_uloc_resolution.as_ref(), self.width, self.height);
+
+        // Bind unit quad geometry (vertex positions).
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.unit_quad_vbo));
+        gl.enable_vertex_attrib_array(self.inst_aloc_local_pos);
+        gl.vertex_attrib_pointer_with_i32(
+            self.inst_aloc_local_pos,
+            2,         // components (x, y)
+            Gl::FLOAT,
+            false,
+            2 * 4,     // stride: 2 floats
+            0,
+        );
+        gl.vertex_attrib_divisor(self.inst_aloc_local_pos, 0); // per-vertex
+
+        // Bind per-instance attribute buffer.
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.inst_attr_vbo));
+        let inst_stride = 8 * 4; // 8 floats × 4 bytes
+
+        // a_inst_rect: x, y, w, h (4 floats at offset 0).
+        gl.enable_vertex_attrib_array(self.inst_aloc_inst_rect);
+        gl.vertex_attrib_pointer_with_i32(
+            self.inst_aloc_inst_rect,
+            4,
+            Gl::FLOAT,
+            false,
+            inst_stride,
+            0,
+        );
+        gl.vertex_attrib_divisor(self.inst_aloc_inst_rect, 1); // per-instance
+
+        // a_inst_color: r, g, b, a (4 floats at offset 16).
+        gl.enable_vertex_attrib_array(self.inst_aloc_inst_color);
+        gl.vertex_attrib_pointer_with_i32(
+            self.inst_aloc_inst_color,
+            4,
+            Gl::FLOAT,
+            false,
+            inst_stride,
+            4 * 4,
+        );
+        gl.vertex_attrib_divisor(self.inst_aloc_inst_color, 1); // per-instance
+
+        // Bind unit quad index buffer and draw.
+        gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&self.unit_quad_ibo));
+        gl.draw_elements_instanced_with_i32(
+            Gl::TRIANGLES,
+            6,                    // indices per instance (unit quad)
+            Gl::UNSIGNED_SHORT,   // unit_quad_ibo uses u16
+            0,
+            actual_quads as i32,
+        );
+
+        // Reset divisors and restore the main program so subsequent
+        // non-instanced draw calls work correctly.
+        gl.vertex_attrib_divisor(self.inst_aloc_inst_rect, 0);
+        gl.vertex_attrib_divisor(self.inst_aloc_inst_color, 0);
+        gl.use_program(Some(&self.program));
     }
 
     fn bind_text_texture(&self, page_idx: usize) {
@@ -626,6 +847,45 @@ fn create_gpu_resources(gl: &Gl) -> Result<(WebGlProgram, WebGlBuffer, WebGlBuff
     let vbo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no vbo"))?;
     let ibo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no ibo"))?;
     Ok((program, vbo, ibo))
+}
+
+/// Create GPU resources for the instanced solid-quad rendering path.
+///
+/// Returns (inst_program, inst_attr_vbo, unit_quad_vbo, unit_quad_ibo).
+/// The unit quad buffers are uploaded immediately (static geometry).
+fn create_instanced_resources(
+    gl: &Gl,
+) -> Result<(WebGlProgram, WebGlBuffer, WebGlBuffer, WebGlBuffer), JsValue> {
+    let inst_program = link_program(gl, INST_VERT_SHADER, INST_FRAG_SHADER)?;
+
+    // Per-instance attribute buffer — initially empty, grown each frame.
+    let inst_attr_vbo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no inst_attr_vbo"))?;
+
+    // Unit quad: four corners of a [0,1]×[0,1] quad.
+    // Layout: x, y (2 floats per vertex, 4 vertices = 8 floats total).
+    let unit_quad_vbo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no unit_quad_vbo"))?;
+    gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&unit_quad_vbo));
+    let unit_vertices: [f32; 8] = [
+        0.0, 0.0, // top-left
+        1.0, 0.0, // top-right
+        1.0, 1.0, // bottom-right
+        0.0, 1.0, // bottom-left
+    ];
+    unsafe {
+        let arr = js_sys::Float32Array::view(&unit_vertices);
+        gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &arr, Gl::STATIC_DRAW);
+    }
+
+    // Unit quad indices: two triangles (0,1,2) and (0,2,3).
+    let unit_quad_ibo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no unit_quad_ibo"))?;
+    gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&unit_quad_ibo));
+    let unit_indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+    unsafe {
+        let arr = js_sys::Uint16Array::view(&unit_indices);
+        gl.buffer_data_with_array_buffer_view(Gl::ELEMENT_ARRAY_BUFFER, &arr, Gl::STATIC_DRAW);
+    }
+
+    Ok((inst_program, inst_attr_vbo, unit_quad_vbo, unit_quad_ibo))
 }
 
 /// Create a single atlas texture with standard parameters.
@@ -712,5 +972,37 @@ void main() {
   } else {
     fragColor = v_color;
   }
+}
+"#;
+
+/// Instanced vertex shader for solid quad rendering.
+///
+/// Per-vertex: `a_local_pos` — normalized position within the unit quad [0,1].
+/// Per-instance: `a_inst_rect` — (x, y, w, h) in pixels; `a_inst_color` — RGBA.
+///
+/// The vertex shader scales the unit quad to the target rect, then converts
+/// pixel coordinates to clip space exactly as the main shader does.
+const INST_VERT_SHADER: &str = r#"#version 300 es
+in vec2 a_local_pos;
+in vec4 a_inst_rect;
+in vec4 a_inst_color;
+uniform vec2 u_resolution;
+out vec4 v_color;
+void main() {
+  // Scale unit quad to the target pixel rect.
+  vec2 pixel_pos = a_inst_rect.xy + a_local_pos * a_inst_rect.zw;
+  vec2 clip = (pixel_pos / u_resolution) * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  v_color = a_inst_color;
+}
+"#;
+
+/// Instanced fragment shader — outputs the per-instance solid color.
+const INST_FRAG_SHADER: &str = r#"#version 300 es
+precision mediump float;
+in vec4 v_color;
+out vec4 fragColor;
+void main() {
+  fragColor = v_color;
 }
 "#;
