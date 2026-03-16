@@ -1,4 +1,4 @@
-name: Browser Tests (headless Chromium)
+name: Test cdp-runner (headless Chromium)
 
 on:
   push:
