@@ -1,17 +1,26 @@
 use unicode_segmentation::UnicodeSegmentation;
 
+/// A text cursor position expressed as a grapheme cluster index (not a byte offset).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Caret {
+    /// Grapheme cluster index (0 = before the first character).
     pub index: usize,
 }
 
+/// A half-open text selection expressed in grapheme cluster indices.
+///
+/// `start` and `end` may be in either order (a reversed selection is common when the
+/// user drags leftward). Use [`Selection::normalized`] before doing range arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
+    /// The anchor end of the selection (where the drag or Shift key-press began).
     pub start: usize,
+    /// The active (focus) end of the selection (where the caret currently sits).
     pub end: usize,
 }
 
 impl Selection {
+    /// Returns a new `Selection` with `start <= end`, swapping the endpoints if needed.
     pub fn normalized(&self) -> Selection {
         if self.start <= self.end {
             *self
@@ -23,17 +32,39 @@ impl Selection {
         }
     }
 
+    /// Returns `true` if `start == end` (zero-length selection).
     pub fn is_empty(&self) -> bool {
         self.start == self.end
     }
 }
 
+/// A reversible text-editing operation, used by [`TextBuffer`] for undo/redo.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextEditOp {
+    /// Characters were inserted at `at` (grapheme index).
     Insert { at: usize, text: String },
+    /// Characters in `[start, end)` (grapheme indices) were deleted.
     Delete { start: usize, end: usize, text: String },
 }
 
+/// A grapheme-aware text buffer with caret, selection, IME composition, and undo/redo.
+///
+/// All positions are expressed in **grapheme cluster** indices, not byte offsets.
+/// This means a single emoji family sequence counts as one position, matching
+/// what users see on screen.
+///
+/// # Example
+///
+/// ```
+/// use ui_core::text::TextBuffer;
+///
+/// let mut buf = TextBuffer::new("hello");
+/// buf.move_to_line_end(false);
+/// buf.insert_text(" world");
+/// assert_eq!(buf.text(), "hello world");
+/// buf.undo();
+/// assert_eq!(buf.text(), "hello");
+/// ```
 #[derive(Clone, Debug)]
 pub struct TextBuffer {
     text: String,
@@ -45,6 +76,8 @@ pub struct TextBuffer {
 }
 
 impl TextBuffer {
+    /// Creates a new `TextBuffer` pre-populated with `text`.
+    /// The caret is placed at the end of the text.
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let caret = Caret {
@@ -60,22 +93,27 @@ impl TextBuffer {
         }
     }
 
+    /// Returns the current text content.
     pub fn text(&self) -> &str {
         &self.text
     }
 
+    /// Returns the current caret position.
     pub fn caret(&self) -> Caret {
         self.caret
     }
 
+    /// Returns the current selection, or `None` if there is no active selection.
     pub fn selection(&self) -> Option<Selection> {
         self.selection
     }
 
+    /// Returns the active IME composition range, or `None` if no composition is in progress.
     pub fn composition(&self) -> Option<Selection> {
         self.composition
     }
 
+    /// Replaces all text content and resets caret, selection, composition, and undo history.
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
         let len = self.grapheme_len();
@@ -86,22 +124,26 @@ impl TextBuffer {
         self.redo_stack.clear();
     }
 
+    /// Returns the number of grapheme clusters in the buffer.
     pub fn grapheme_len(&self) -> usize {
         UnicodeSegmentation::graphemes(self.text.as_str(), true).count()
     }
 
+    /// Selects all text and moves the caret to the end.
     pub fn select_all(&mut self) {
         let len = self.grapheme_len();
         self.selection = Some(Selection { start: 0, end: len });
         self.caret.index = len;
     }
 
+    /// Moves the caret to `index` (clamped to the buffer length) and clears the selection.
     pub fn set_caret(&mut self, index: usize) {
         let len = self.grapheme_len();
         self.caret.index = index.min(len);
         self.selection = None;
     }
 
+    /// Sets the selection to `[start, end]` (both clamped) and places the caret at `end`.
     pub fn set_selection(&mut self, start: usize, end: usize) {
         let len = self.grapheme_len();
         let s = start.min(len);
@@ -110,6 +152,9 @@ impl TextBuffer {
         self.caret.index = e;
     }
 
+    /// Inserts `text` at the caret (replacing any current selection).
+    ///
+    /// Returns the [`TextEditOp`] that was pushed onto the undo stack.
     pub fn insert_text(&mut self, text: &str) -> Option<TextEditOp> {
         let _ = self.delete_selection();
         let at = self.caret.index;
@@ -125,6 +170,10 @@ impl TextBuffer {
         Some(op)
     }
 
+    /// Deletes the grapheme immediately before the caret (Backspace).
+    ///
+    /// If there is an active selection, deletes the selection instead. Returns `None`
+    /// if there is nothing to delete.
     pub fn delete_backward(&mut self) -> Option<TextEditOp> {
         if self.delete_selection().is_some() {
             return None;
@@ -137,6 +186,10 @@ impl TextBuffer {
         self.delete_range(start, end)
     }
 
+    /// Deletes the grapheme immediately after the caret (Delete key).
+    ///
+    /// If there is an active selection, deletes the selection instead. Returns `None`
+    /// if there is nothing to delete.
     pub fn delete_forward(&mut self) -> Option<TextEditOp> {
         if self.delete_selection().is_some() {
             return None;
@@ -150,6 +203,8 @@ impl TextBuffer {
         self.delete_range(start, end)
     }
 
+    /// Moves the caret one grapheme to the left.
+    /// If `extend_selection` is `true` the selection is extended rather than collapsed.
     pub fn move_left(&mut self, extend_selection: bool) {
         if self.caret.index == 0 {
             return;
@@ -158,6 +213,8 @@ impl TextBuffer {
         self.move_to(new_index, extend_selection);
     }
 
+    /// Moves the caret one grapheme to the right.
+    /// If `extend_selection` is `true` the selection is extended rather than collapsed.
     pub fn move_right(&mut self, extend_selection: bool) {
         let len = self.grapheme_len();
         if self.caret.index >= len {
@@ -167,6 +224,8 @@ impl TextBuffer {
         self.move_to(new_index, extend_selection);
     }
 
+    /// Moves the caret to `index` (clamped).
+    /// If `extend_selection` is `true` the selection is extended rather than collapsed.
     pub fn move_to(&mut self, index: usize, extend_selection: bool) {
         let len = self.grapheme_len();
         let clamped = index.min(len);
@@ -194,6 +253,8 @@ impl TextBuffer {
         self.move_to(target, extend_selection);
     }
 
+    /// Begins an IME composition sequence at the current caret position.
+    /// Call this in response to a `compositionstart` event.
     pub fn begin_composition(&mut self) {
         self.composition = Some(Selection {
             start: self.caret.index,
@@ -201,6 +262,8 @@ impl TextBuffer {
         });
     }
 
+    /// Updates the in-progress composition with the current candidate `text`.
+    /// Replaces the previous composition range in-place.
     pub fn update_composition(&mut self, text: &str) {
         let range = self.composition.unwrap_or(Selection {
             start: self.caret.index,
@@ -215,6 +278,7 @@ impl TextBuffer {
         self.caret.index = new_end;
     }
 
+    /// Finalises the IME composition, committing `text` as the confirmed input.
     pub fn end_composition(&mut self, text: &str) {
         if let Some(range) = self.composition {
             self.replace_range(range.start, range.end, text);
@@ -227,6 +291,7 @@ impl TextBuffer {
         self.caret.index = new_end;
     }
 
+    /// Undoes the last edit operation. Returns `true` if an operation was undone.
     pub fn undo(&mut self) -> bool {
         let op = match self.undo_stack.pop() {
             Some(op) => op,
@@ -238,6 +303,7 @@ impl TextBuffer {
         true
     }
 
+    /// Redoes the last undone operation. Returns `true` if an operation was redone.
     pub fn redo(&mut self) -> bool {
         let op = match self.redo_stack.pop() {
             Some(op) => op,
@@ -249,6 +315,7 @@ impl TextBuffer {
         true
     }
 
+    /// Returns the currently selected text, or `None` if there is no active selection.
     pub fn selected_text(&self) -> Option<String> {
         let sel = self.selection?;
         if sel.is_empty() {

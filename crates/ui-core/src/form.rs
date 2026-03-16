@@ -6,8 +6,22 @@ use std::sync::Arc;
 use crate::state::History;
 use crate::validation::{validate_value, ValidationError, ValidationRule};
 
+/// A field identifier — an owned `String` used as a key in form paths and schemas.
 pub type FieldId = String;
 
+/// A dot-separated path identifying a specific field within a (possibly nested) form.
+///
+/// Use [`FormPath::root`] as a starting point and [`FormPath::push`] to descend
+/// into nested groups.
+///
+/// # Example
+///
+/// ```
+/// use ui_core::form::FormPath;
+///
+/// let path = FormPath::root().push("address").push("city");
+/// assert_eq!(path.as_string(), "address.city");
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FormPath(pub Vec<FieldId>);
 
@@ -28,16 +42,20 @@ impl Hash for FormPath {
 }
 
 impl FormPath {
+    /// Returns the root (empty) path, representing the top level of the form.
     pub fn root() -> Self {
         FormPath(Vec::new())
     }
 
+    /// Returns a new path with `id` appended as the next segment.
     pub fn push(&self, id: impl Into<FieldId>) -> Self {
         let mut next = self.0.clone();
         next.push(id.into());
         FormPath(next)
     }
 
+    /// Returns the path as a human-readable dot-separated string (e.g. `"address.city"`).
+    /// Returns `"root"` for the empty path.
     pub fn as_string(&self) -> String {
         if self.0.is_empty() {
             "root".to_string()
@@ -47,27 +65,44 @@ impl FormPath {
     }
 }
 
+/// The runtime value stored in a form field.
+///
+/// Each variant corresponds to a [`FieldType`] in the schema.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FieldValue {
+    /// Free-form text value.
     Text(String),
+    /// Numeric value.
     Number(f64),
+    /// Boolean (checkbox) value.
     Bool(bool),
+    /// Currently selected option string for a `Select` field.
     Selection(String),
+    /// Values for a non-repeatable nested group, keyed by child field id.
     Group(HashMap<FieldId, FieldValue>),
+    /// Values for a repeatable nested group — a list of row maps.
     GroupList(Vec<HashMap<FieldId, FieldValue>>),
 }
 
+/// Runtime state of a single form field.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FieldState {
+    /// The current value.
     pub value: FieldValue,
+    /// Validation error messages (populated by [`Form::validate`]).
     pub errors: Vec<String>,
+    /// `true` after the user has interacted with this field at least once.
     pub touched: bool,
+    /// `true` while a submission is in-flight (optimistic UI).
     pub pending: bool,
+    /// `true` if the field is disabled (read-only in the UI).
     pub disabled: bool,
+    /// `true` if the value has changed since the last successful submission.
     pub dirty: bool,
 }
 
 impl FieldState {
+    /// Creates a new field state with the given initial value and all flags set to `false`.
     pub fn new(value: FieldValue) -> Self {
         Self {
             value,
@@ -138,21 +173,36 @@ impl AutocompleteHint {
     }
 }
 
+/// Declares the semantic type of a form field.
+///
+/// Determines which widget is rendered and what [`FieldValue`] variant is stored.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FieldType {
+    /// Single-line or multiline text input. Runtime value: [`FieldValue::Text`].
     Text,
+    /// Numeric input. Runtime value: [`FieldValue::Number`].
     Number,
+    /// Boolean checkbox. Runtime value: [`FieldValue::Bool`].
     Checkbox,
+    /// Dropdown / select with a fixed list of options. Runtime value: [`FieldValue::Selection`].
     Select { options: Vec<String> },
+    /// Nested group of sub-fields. If `repeatable` is `true`, the field holds a
+    /// list of rows (each row is one instance of the sub-schema).
     Group { fields: Vec<FieldSchema>, repeatable: bool },
 }
 
+/// Schema declaration for a single form field.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FieldSchema {
+    /// Unique identifier for this field within its parent group.
     pub id: FieldId,
+    /// Human-readable label shown next to the widget.
     pub label: String,
+    /// The semantic type, determining the widget and value kind.
     pub field_type: FieldType,
+    /// Validation rules evaluated when [`Form::validate`] is called.
     pub rules: Vec<ValidationRule>,
+    /// Optional placeholder text shown when the field is empty.
     pub placeholder: Option<String>,
     /// Autofill / password-manager hint.  When `Some`, a hidden DOM `<input>`
     /// with the corresponding `autocomplete` attribute will be created by the
@@ -160,9 +210,30 @@ pub struct FieldSchema {
     pub autocomplete: Option<AutocompleteHint>,
 }
 
+/// Declares the complete schema for a form.
+///
+/// Build a schema using the builder methods, then pass it to [`Form::new`].
+///
+/// # Example
+///
+/// ```
+/// use ui_core::form::{FormSchema, FieldType};
+/// use ui_core::validation::ValidationRule;
+///
+/// let schema = FormSchema::new("contact")
+///     .field("name", FieldType::Text)
+///     .with_label("name", "Full name")
+///     .required("name")
+///     .field("email", FieldType::Text)
+///     .with_label("email", "Email")
+///     .required("email")
+///     .with_validation("email", ValidationRule::Email);
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FormSchema {
+    /// Unique name for this form (used for logging and serialization).
     pub name: String,
+    /// Top-level field declarations.
     pub fields: Vec<FieldSchema>,
 }
 
@@ -292,6 +363,7 @@ pub struct FormState {
 }
 
 impl FormState {
+    /// Creates an empty form state with no fields.
     pub fn empty() -> Self {
         Self {
             fields: HashMap::new(),
@@ -319,24 +391,59 @@ impl FormState {
     }
 }
 
+/// An in-flight form submission awaiting a server response.
 #[derive(Clone, Debug)]
 pub struct PendingSubmission {
+    /// Monotonically increasing ID for this submission.
     pub id: u64,
+    /// Snapshot of the form state at submission time, used for optimistic rollback.
     pub snapshot: Arc<FormState>,
+    /// The serialized payload that was sent to the server.
     pub payload: serde_json::Value,
+    /// How many automatic retries remain before the submission is abandoned.
     pub retries_left: u8,
 }
 
+/// Events emitted by the form model.
+///
+/// Call [`Form::set_value`], [`Form::validate`], [`Form::start_submit`], etc. and
+/// inspect the returned `FormEvent` to drive your application's side-effects (e.g.
+/// showing a spinner, displaying errors, navigating on success).
 #[derive(Clone, Debug)]
 pub enum FormEvent {
+    /// A field value changed at the given path.
     FieldChanged(FormPath),
+    /// Validation failed; the vec contains one error per failing field.
     ValidationFailed(Vec<ValidationError>),
+    /// A submission started successfully with the given id.
     SubmissionStarted(u64),
+    /// The server confirmed the submission with the given id succeeded.
     SubmissionSuccess(u64),
+    /// The server reported an error for the submission with the given id.
     SubmissionError(u64, String),
+    /// The submission was rolled back (state restored to the pre-submit snapshot).
     RolledBack(u64),
 }
 
+/// The live form model: schema, current field state, submission lifecycle, and history.
+///
+/// Create a `Form` with [`Form::new`], update it via [`Form::set_value`], and drive
+/// submissions with [`Form::start_submit`] / [`Form::apply_success`] /
+/// [`Form::apply_error`].
+///
+/// # Example
+///
+/// ```
+/// use ui_core::form::{Form, FormSchema, FieldType, FieldValue, FormPath};
+///
+/// let schema = FormSchema::new("example").field("name", FieldType::Text).required("name");
+/// let mut form = Form::new(schema);
+///
+/// let path = FormPath::root().push("name");
+/// form.set_value(&path, FieldValue::Text("Alice".into()));
+///
+/// assert!(form.validate().is_ok());
+/// ```
 #[derive(Clone, Debug)]
 pub struct Form {
     schema: FormSchema,
@@ -348,6 +455,7 @@ pub struct Form {
 }
 
 impl Form {
+    /// Creates a new form from the given schema, initializing all fields to their default values.
     pub fn new(schema: FormSchema) -> Self {
         let state = Self::build_initial_state(&schema);
         Self {
@@ -477,6 +585,10 @@ impl Form {
         }
     }
 
+    /// Sets the value of the field at `path`, marks it as touched and dirty, and
+    /// clears any existing validation errors for that field.
+    ///
+    /// Returns [`FormEvent::FieldChanged`] with the path that changed.
     pub fn set_value(&mut self, path: &FormPath, value: FieldValue) -> FormEvent {
         let mut next = (*self.state).clone();
         if let Some(field) = next.fields.get_mut(path) {
@@ -523,6 +635,10 @@ impl Form {
         }
     }
 
+    /// Appends a new empty row to the repeatable group at `path`.
+    ///
+    /// `fields` must match the sub-schema declared for the group. Returns `true`
+    /// if the row was added, `false` if `path` does not point to a `GroupList`.
     pub fn add_repeat_group(&mut self, path: &FormPath, fields: Vec<FieldSchema>) -> bool {
         let mut next = (*self.state).clone();
         let mut additions: Vec<(FormPath, FieldState)> = Vec::new();
@@ -573,6 +689,10 @@ impl Form {
         true
     }
 
+    /// Runs all validation rules and returns `Ok(())` if the form is valid.
+    ///
+    /// On failure, returns `Err(errors)` and writes the error messages into the
+    /// affected [`FieldState::errors`] fields so widgets can display them.
     pub fn validate(&mut self) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
         for field in &self.schema.fields {
@@ -633,6 +753,14 @@ impl Form {
         }
     }
 
+    /// Validates the form and, if valid, starts an optimistic submission.
+    ///
+    /// All fields are marked `pending = true` immediately. Returns
+    /// `Ok(FormEvent::SubmissionStarted(id))` on success, or
+    /// `Err(FormEvent::ValidationFailed(errors))` if validation fails.
+    ///
+    /// After the server responds, call [`apply_success`](Self::apply_success) or
+    /// [`apply_error`](Self::apply_error) with the returned `id`.
     pub fn start_submit(&mut self, payload: serde_json::Value, retries: u8) -> Result<FormEvent, FormEvent> {
         if let Err(errors) = self.validate() {
             return Err(FormEvent::ValidationFailed(errors));
@@ -658,6 +786,10 @@ impl Form {
         Err(FormEvent::SubmissionError(id, "failed to start".to_string()))
     }
 
+    /// Marks the pending submission with `id` as succeeded.
+    ///
+    /// Clears all `pending` and `dirty` flags, and removes the pending submission.
+    /// Returns [`FormEvent::SubmissionSuccess`].
     pub fn apply_success(&mut self, id: u64) -> FormEvent {
         if let Some(pending) = &self.pending {
             if pending.id == id {
@@ -674,6 +806,11 @@ impl Form {
         FormEvent::SubmissionError(id, "unknown submission".to_string())
     }
 
+    /// Marks the pending submission with `id` as failed.
+    ///
+    /// If `rollback` is `true`, the form state is restored to the pre-submit snapshot
+    /// and [`FormEvent::RolledBack`] is returned. Otherwise the current state is kept
+    /// with `pending` cleared and [`FormEvent::SubmissionError`] is returned.
     pub fn apply_error(&mut self, id: u64, message: &str, rollback: bool) -> FormEvent {
         if let Some(pending) = &self.pending {
             if pending.id == id {
@@ -695,6 +832,10 @@ impl Form {
         FormEvent::SubmissionError(id, "unknown submission".to_string())
     }
 
+    /// Attempts to retry the pending submission, decrementing `retries_left`.
+    ///
+    /// Returns `Some(id)` if a retry is possible, or `None` if there are no
+    /// retries remaining or no submission is pending.
     pub fn retry_pending(&mut self) -> Option<u64> {
         if let Some(pending) = &mut self.pending {
             if pending.retries_left > 0 {
@@ -705,6 +846,9 @@ impl Form {
         None
     }
 
+    /// Times out the current pending submission, rolling back state.
+    ///
+    /// Equivalent to `apply_error(id, "timeout", true)`.
     pub fn timeout_pending(&mut self) -> FormEvent {
         if let Some(pending) = &self.pending {
             return self.apply_error(pending.id, "timeout", true);
@@ -712,6 +856,9 @@ impl Form {
         FormEvent::SubmissionError(0, "no pending submission".to_string())
     }
 
+    /// Appends a server-side error message to the field at `path`.
+    ///
+    /// Use this to display errors returned by the server after a failed submission.
     pub fn set_field_error(&mut self, path: &FormPath, message: &str) {
         let mut next = (*self.state).clone();
         if let Some(field) = next.fields.get_mut(path) {

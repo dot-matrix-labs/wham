@@ -47,26 +47,42 @@ impl ScrollState {
     }
 }
 
+/// The semantic kind of a widget, used in accessibility and hit testing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WidgetKind {
+    /// A non-interactive text label.
     Label,
+    /// A clickable button.
     Button,
+    /// A toggleable checkbox.
     Checkbox,
+    /// A radio button (one of a mutually-exclusive group).
     Radio,
+    /// A single-line or multiline text input.
     TextInput,
+    /// A dropdown select widget.
     Select,
+    /// A logical group of widgets (used for nested form sections).
     Group,
+    /// A scrollable container.
     ScrollContainer,
 }
 
+/// Metadata emitted for each widget during a frame; used for accessibility and hit testing.
 #[derive(Clone, Debug)]
 pub struct WidgetInfo {
+    /// Stable, unique widget ID (hash of the full ID stack path).
     pub id: u64,
+    /// The semantic kind of this widget.
     pub kind: WidgetKind,
+    /// Human-readable label (used as the accessible name).
     pub label: String,
+    /// Current value as a string (e.g. text content, checked state).
     pub value: Option<String>,
+    /// Bounding rectangle in logical pixels.
     pub rect: Rect,
+    /// Accessibility state flags (focused, disabled, selected, etc.).
     pub state: A11yState,
 }
 
@@ -237,6 +253,20 @@ impl Layout {
     }
 }
 
+/// The immediate-mode UI context.
+///
+/// Create a `Ui` once, then call [`begin_frame`](Ui::begin_frame) /
+/// widget methods / [`end_frame`](Ui::end_frame) every animation frame.
+///
+/// # Frame Lifecycle
+///
+/// ```rust,ignore
+/// ui.begin_frame(events, width, height, scale, time_ms);
+/// ui.label("Hello");
+/// if ui.button("Submit") { /* handle click */ }
+/// let a11y_tree = ui.end_frame();
+/// // render ui.batch() with the WebGL2 renderer
+/// ```
 pub struct Ui {
     theme: Theme,
     batch: Batch,
@@ -615,6 +645,15 @@ impl Ui {
     // Frame lifecycle
     // -----------------------------------------------------------------
 
+    /// Begins a new UI frame.
+    ///
+    /// Must be called once at the start of each animation frame before emitting any
+    /// widgets. Clears the batch, resets the layout cursor, and processes input events.
+    ///
+    /// - `events` — all input events collected since the previous frame
+    /// - `width` / `height` — canvas size in logical (CSS) pixels
+    /// - `scale` — device-pixel ratio (e.g. `2.0` on HiDPI displays)
+    /// - `time_ms` — monotonic timestamp in milliseconds (used for animations)
     pub fn begin_frame(
         &mut self,
         events: Vec<InputEvent>,
@@ -664,6 +703,11 @@ impl Ui {
         // It is cleared in apply_pointer_selection on PointerUp.
     }
 
+    /// Finalises the frame and returns the accessibility tree.
+    ///
+    /// Must be called once after all widgets have been emitted. Handles Tab-key
+    /// navigation, draws the focus ring, flushes the dropdown panel, and registers
+    /// all widget rects with the hit-test grid.
     pub fn end_frame(&mut self) -> A11yTree {
         self.handle_keyboard_navigation();
         self.draw_focus_ring();
@@ -934,6 +978,7 @@ impl Ui {
     // Widgets
     // -----------------------------------------------------------------
 
+    /// Emits a non-interactive text label at the current layout position.
     pub fn label(&mut self, text: &str) {
         let rect = self.layout.next_rect(24.0 * self.scale);
         let clip = self.effective_clip();
@@ -954,6 +999,7 @@ impl Ui {
         });
     }
 
+    /// Emits a non-interactive text label with an explicit `color` override.
     pub fn label_colored(&mut self, text: &str, color: Color) {
         let rect = self.layout.next_rect(20.0 * self.scale);
         let clip = self.effective_clip();
@@ -1027,6 +1073,10 @@ impl Ui {
         Some(rect)
     }
 
+    /// Emits a clickable button with the given `label`.
+    ///
+    /// Returns `true` on the frame that the button is clicked (pointer down then up
+    /// within the button bounds). Also moves keyboard focus to the button on click.
     pub fn button(&mut self, label: &str) -> bool {
         let rect = self.layout.next_rect(40.0 * self.scale);
         let id = self.hash_id(label);
@@ -1088,6 +1138,9 @@ impl Ui {
         clicked
     }
 
+    /// Emits a checkbox with the given `label`.
+    ///
+    /// Toggles `*value` on click and returns `true` on the frame the toggle occurs.
     pub fn checkbox(&mut self, label: &str, value: &mut bool) -> bool {
         let rect = self.layout.next_rect(32.0 * self.scale);
         let id = self.hash_id(label);
@@ -1147,6 +1200,14 @@ impl Ui {
         clicked
     }
 
+    /// Emits a dropdown select widget.
+    ///
+    /// Clicking the trigger opens a panel showing all `options`. Selecting an option
+    /// writes it into `*value` and closes the panel. Returns `true` on the frame the
+    /// selection changes.
+    ///
+    /// Supports keyboard navigation (ArrowUp/Down, Enter, Escape) and type-ahead
+    /// when the widget is focused.
     pub fn select(&mut self, label: &str, options: &[String], value: &mut String) -> bool {
         let rect = self.layout.next_rect(36.0 * self.scale);
         let id = self.hash_id(label);
@@ -1285,6 +1346,10 @@ impl Ui {
         changed
     }
 
+    /// Emits a radio button group with a group `label` followed by one radio per option.
+    ///
+    /// `*selected` is the index of the currently selected option. Returns `true` on
+    /// the frame the selection changes.
     pub fn radio_group(&mut self, label: &str, options: &[String], selected: &mut usize) -> bool {
         self.ui_label_inline(label);
         let mut changed = false;
@@ -1349,14 +1414,26 @@ impl Ui {
         changed
     }
 
+    /// Emits a single-line text input widget.
+    ///
+    /// `buffer` holds the mutable text state. `placeholder` is shown when the buffer
+    /// is empty. Returns `true` on the frame the widget is clicked (gains focus).
+    ///
+    /// The caller is responsible for managing the `TextBuffer`. For form-integrated
+    /// inputs that automatically sync with a [`Form`](crate::form::Form), use
+    /// [`text_input_for`](Self::text_input_for) instead.
     pub fn text_input(&mut self, label: &str, buffer: &mut TextBuffer, placeholder: &str) -> bool {
         self.text_input_impl(label, buffer, placeholder, false, false, 40.0 * self.scale)
     }
 
+    /// Emits a password-masked text input (characters displayed as bullets).
+    ///
+    /// Otherwise identical to [`text_input`](Self::text_input).
     pub fn text_input_masked(&mut self, label: &str, buffer: &mut TextBuffer, placeholder: &str) -> bool {
         self.text_input_impl(label, buffer, placeholder, false, true, 40.0 * self.scale)
     }
 
+    /// Emits a multiline text input with the given fixed `height` in logical pixels.
     pub fn text_input_multiline(
         &mut self,
         label: &str,
@@ -1719,6 +1796,9 @@ impl Ui {
         self.active_clip = self.clip_stack.last().copied();
     }
 
+    /// Displays a tooltip `text` near the top-right corner when the widget
+    /// identified by `target_label` is hovered. Call this immediately after
+    /// the widget it annotates.
     pub fn tooltip(&mut self, target_label: &str, text: &str) {
         let id = self.hash_id(target_label);
         if self.hovered != Some(id) {

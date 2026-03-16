@@ -1,3 +1,35 @@
+//! `ui-core` — platform-agnostic GPU-rendered forms library.
+//!
+//! This crate provides the immediate-mode widget API, form model, text editing,
+//! validation, and batching primitives. It has no dependency on browser APIs and
+//! can be compiled and tested with `cargo test` on any host platform.
+//!
+//! # Quick Start
+//!
+//! ```rust,ignore
+//! use ui_core::prelude::*;
+//!
+//! let schema = FormSchema::new("login")
+//!     .field("email", FieldType::Text)
+//!     .required("email");
+//!
+//! let mut form = Form::new(schema);
+//! let theme = Theme::default_light();
+//! let mut ui = Ui::new(800.0, 600.0, theme);
+//!
+//! // Each animation frame:
+//! ui.begin_frame(events, width, height, scale, time_ms);
+//! ui.label("Sign in");
+//! // ... emit widgets ...
+//! let a11y = ui.end_frame();
+//! // Render ui.batch() with the WebGL2 renderer.
+//! ```
+//!
+//! See [`docs/getting-started.md`](https://github.com/your-org/wham/blob/main/docs/getting-started.md)
+//! for a full walkthrough.
+
+#![warn(missing_docs)]
+
 pub mod accessibility;
 pub mod app;
 pub mod batch;
