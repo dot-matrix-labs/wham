@@ -33,11 +33,13 @@
 use std::path::{Path, PathBuf};
 
 use ui_core::{
-    batch::Vertex,
+    batch::{TextRun, Vertex},
     theme::Theme,
     types::{Color, Rect},
     ui::Ui,
 };
+
+static FONT_BYTES: &[u8] = include_bytes!("../assets/Fallback.ttf");
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -202,12 +204,113 @@ pub fn render_to_pixels(size: Size, build: impl Fn(&mut Ui)) -> Vec<u8> {
         rasterize_batch(cmd, &vertices, &indices, &mut pixels, size);
     }
 
-    // Rasterize text runs as solid-colour rectangles (MVP: no glyph rendering).
+    // Rasterize text runs using real glyph rendering via fontdue.
+    let font = fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default())
+        .expect("wham-test: bundled font must parse");
     for run in &text_runs {
-        fill_rect(&mut pixels, size, run.rect, run.color, run.clip);
+        render_text_run(&font, run, &mut pixels, size);
     }
 
     pixels
+}
+
+// ---------------------------------------------------------------------------
+// Glyph text run renderer
+// ---------------------------------------------------------------------------
+
+/// Render a single text run into the pixel buffer using fontdue glyph
+/// rasterization, with Porter-Duff "over" compositing and optional clipping.
+fn render_text_run(
+    font: &fontdue::Font,
+    run: &TextRun,
+    pixels: &mut Vec<u8>,
+    size: Size,
+) {
+    let font_size = run.font_size;
+    let color = run.color;
+    let clip = run.clip;
+
+    // Vertical centre: approximate line height from metrics.
+    let metrics = font.horizontal_line_metrics(font_size).unwrap_or(fontdue::LineMetrics {
+        ascent: font_size * 0.8,
+        descent: -(font_size * 0.2),
+        line_gap: 0.0,
+        new_line_size: font_size,
+    });
+    let line_height = metrics.ascent - metrics.descent;
+    let baseline_y = run.rect.y + (run.rect.h - line_height) * 0.5 + metrics.ascent;
+
+    let mut cursor_x = run.rect.x + 4.0; // small left padding
+
+    for ch in run.text.chars() {
+        if ch == ' ' {
+            let (m, _) = font.rasterize(' ', font_size);
+            cursor_x += m.advance_width;
+            continue;
+        }
+        let (glyph_metrics, bitmap) = font.rasterize(ch, font_size);
+        if glyph_metrics.width == 0 || glyph_metrics.height == 0 {
+            cursor_x += glyph_metrics.advance_width;
+            continue;
+        }
+
+        let glyph_x = (cursor_x + glyph_metrics.xmin as f32).round() as i32;
+        let glyph_y =
+            (baseline_y - glyph_metrics.ymin as f32 - glyph_metrics.height as f32).round() as i32;
+
+        for gy in 0..glyph_metrics.height {
+            for gx in 0..glyph_metrics.width {
+                let px = glyph_x + gx as i32;
+                let py = glyph_y + gy as i32;
+
+                if px < 0 || py < 0 || px >= size.width as i32 || py >= size.height as i32 {
+                    continue;
+                }
+
+                // Clip rect check.
+                if let Some(c) = clip {
+                    if px < c.x as i32
+                        || py < c.y as i32
+                        || px >= (c.x + c.w) as i32
+                        || py >= (c.y + c.h) as i32
+                    {
+                        continue;
+                    }
+                }
+
+                // Also clip to run rect.
+                if px < run.rect.x as i32 || px >= (run.rect.x + run.rect.w) as i32 {
+                    continue;
+                }
+
+                let coverage = bitmap[gy * glyph_metrics.width + gx] as f32 / 255.0;
+                if coverage < 0.01 {
+                    continue;
+                }
+
+                let idx = ((py as u32 * size.width + px as u32) * 4) as usize;
+                if idx + 3 >= pixels.len() {
+                    continue;
+                }
+
+                let src_a = coverage * color.a;
+                let dst_a = pixels[idx + 3] as f32 / 255.0;
+                let out_a = src_a + dst_a * (1.0 - src_a);
+                if out_a < 1e-6 {
+                    continue;
+                }
+
+                pixels[idx] =
+                    blend_channel((color.r * 255.0) as u8, src_a, pixels[idx], dst_a, out_a);
+                pixels[idx + 1] =
+                    blend_channel((color.g * 255.0) as u8, src_a, pixels[idx + 1], dst_a, out_a);
+                pixels[idx + 2] =
+                    blend_channel((color.b * 255.0) as u8, src_a, pixels[idx + 2], dst_a, out_a);
+                pixels[idx + 3] = (out_a * 255.0).round() as u8;
+            }
+        }
+        cursor_x += glyph_metrics.advance_width;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -456,7 +559,6 @@ fn build_diff_image(
 
 use ui_core::{
     accessibility::A11yTree,
-    batch::TextRun,
     input::InputEvent,
     types::Vec2,
     ui::{WidgetInfo, WidgetKind},

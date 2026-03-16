@@ -10,5 +10,6 @@ path = "src/lib.rs"
 [dependencies]
 ui-core = { path = "../ui-core" }
 png = "0.17"
+fontdue = "0.8"
 
 [dev-dependencies]
