@@ -2,7 +2,7 @@ use std::env;
 use serde_json::Value;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -28,7 +28,7 @@ impl Default for Config {
             port: env::var("CDP_PORT")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(9222),
+                .unwrap_or(0), // 0 = auto-pick a free port at launch time
             headless: env::var("CDP_HEADLESS").unwrap_or_else(|_| "1".to_string()) != "0",
             start_server: env::var("CDP_NO_SERVER").unwrap_or_else(|_| "0".to_string()) != "1",
             start_chrome: env::var("CDP_NO_CHROME").unwrap_or_else(|_| "0".to_string()) != "1",
@@ -53,15 +53,26 @@ impl BrowserSession {
     /// WebSocket, and enable the necessary domains.  Returns `Err` if Chrome
     /// is not installed — callers should translate that into a graceful skip.
     pub fn launch(config: &Config) -> Result<Self, String> {
-        let mut server = None;
-        if config.start_server {
-            server = Some(start_server()?);
-            thread::sleep(Duration::from_millis(200));
-        }
+        // Resolve the HTTP server port: if the config URL contains port 0 or
+        // if we need to start a fresh server, pick a free port so parallel
+        // test sessions don't collide on 8000.
+        let (app_url, server) = if config.start_server {
+            let server_port = find_free_port();
+            let child = start_server(server_port)?;
+            thread::sleep(Duration::from_millis(300));
+            // Rewrite the base URL to use the dynamically allocated server port.
+            let url = replace_port_in_url(&config.url, server_port);
+            (url, Some(child))
+        } else {
+            (config.url.clone(), None)
+        };
+
+        // Resolve the CDP (Chrome remote debugging) port.
+        let cdp_port = if config.port == 0 { find_free_port() } else { config.port };
 
         let (chrome, profile_dir, ws_url) = if config.start_chrome {
             let (child, dir, ws_url) =
-                start_chrome_with_retry(config.port, config.headless, &config.url)?;
+                start_chrome_with_retry(cdp_port, config.headless, &app_url)?;
             (Some(child), Some(dir), ws_url)
         } else {
             return Err("CDP_NO_CHROME is set; chromium must be started explicitly".to_string());
@@ -81,7 +92,7 @@ impl BrowserSession {
             chrome,
             server,
             profile_dir,
-            url: config.url.clone(),
+            url: app_url,
         })
     }
 
@@ -366,24 +377,51 @@ pub fn run(config: Config) -> Result<(), String> {
     Ok(())
 }
 
-fn start_server() -> Result<Child, String> {
-    match spawn_server("python3") {
+/// Bind to port 0 and let the OS assign a free port, then return it.
+fn find_free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("find_free_port: bind failed")
+        .local_addr()
+        .expect("find_free_port: local_addr failed")
+        .port()
+}
+
+/// Replace the port number in a URL like `http://127.0.0.1:8000/path` with
+/// `new_port`.  If no port is present the URL is returned unchanged.
+fn replace_port_in_url(url: &str, new_port: u16) -> String {
+    // Match "://host:port" and replace only the port digits.
+    if let Some(authority_start) = url.find("://") {
+        let after = &url[authority_start + 3..];
+        if let Some(colon) = after.find(':') {
+            let port_start = authority_start + 3 + colon + 1;
+            let port_end = url[port_start..]
+                .find(|c: char| !c.is_ascii_digit())
+                .map(|n| port_start + n)
+                .unwrap_or(url.len());
+            return format!("{}{}{}", &url[..port_start], new_port, &url[port_end..]);
+        }
+    }
+    url.to_string()
+}
+
+fn start_server(port: u16) -> Result<Child, String> {
+    match spawn_server("python3", port) {
         Ok(child) => Ok(child),
         Err(err) if err.kind() == ErrorKind::NotFound => {
-            spawn_server("python").map_err(|e| format!("server start failed: {}", e))
+            spawn_server("python", port).map_err(|e| format!("server start failed: {}", e))
         }
         Err(err) => Err(format!("server start failed: {}", err)),
     }
 }
 
-fn spawn_server(bin: &str) -> std::io::Result<Child> {
+fn spawn_server(bin: &str, port: u16) -> std::io::Result<Child> {
     let mut web_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     web_root.push("..");
     web_root.push("..");
     web_root.push("examples");
     web_root.push("web");
     let mut cmd = Command::new(bin);
-    cmd.arg("-m").arg("http.server").arg("8000");
+    cmd.arg("-m").arg("http.server").arg(port.to_string());
     cmd.current_dir(web_root);
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
     cmd.spawn()
