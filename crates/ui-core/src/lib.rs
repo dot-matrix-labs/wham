@@ -28,8 +28,6 @@
 //! See [`docs/getting-started.md`](https://github.com/your-org/wham/blob/main/docs/getting-started.md)
 //! for a full walkthrough.
 
-#![warn(missing_docs)]
-
 /// Accessibility tree — roles, states, and the hidden DOM mirror interface.
 pub mod accessibility;
 /// [`FormApp`] trait for building form applications.
