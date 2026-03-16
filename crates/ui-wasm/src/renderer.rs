@@ -12,7 +12,8 @@ pub struct Renderer {
     vbo: WebGlBuffer,
     ibo: WebGlBuffer,
     atlas: TextAtlas,
-    atlas_texture: WebGlTexture,
+    /// One GPU texture per atlas page.
+    atlas_textures: Vec<WebGlTexture>,
     width: f32,
     height: f32,
     context_valid: bool,
@@ -25,11 +26,15 @@ impl Renderer {
             .ok_or_else(|| JsValue::from_str("WebGL2 not supported"))?
             .dyn_into()?;
 
-        let (program, vbo, ibo, atlas_texture) = create_gpu_resources(&gl)?;
+        let (program, vbo, ibo) = create_gpu_resources(&gl)?;
 
         gl.use_program(Some(&program));
         gl.enable(Gl::BLEND);
         gl.blend_func(Gl::SRC_ALPHA, Gl::ONE_MINUS_SRC_ALPHA);
+
+        // Create the initial texture for page 0.
+        let tex = create_atlas_texture(&gl)?;
+        let atlas_textures = vec![tex];
 
         let mut renderer = Self {
             gl,
@@ -37,12 +42,12 @@ impl Renderer {
             vbo,
             ibo,
             atlas: TextAtlas::new(1024, 1024),
-            atlas_texture,
+            atlas_textures,
             width,
             height,
             context_valid: true,
         };
-        renderer.init_atlas_texture();
+        renderer.init_atlas_textures();
         renderer.resize(width, height);
         Ok(renderer)
     }
@@ -65,12 +70,18 @@ impl Renderer {
     /// need to recreate shaders, programs, buffers, textures, and re-upload
     /// the glyph atlas.
     pub fn reinitialize(&mut self) -> Result<(), JsValue> {
-        let (program, vbo, ibo, atlas_texture) = create_gpu_resources(&self.gl)?;
+        let (program, vbo, ibo) = create_gpu_resources(&self.gl)?;
 
         self.program = program;
         self.vbo = vbo;
         self.ibo = ibo;
-        self.atlas_texture = atlas_texture;
+
+        // Recreate textures for all atlas pages.
+        self.atlas_textures.clear();
+        for _ in 0..self.atlas.page_count() {
+            let tex = create_atlas_texture(&self.gl)?;
+            self.atlas_textures.push(tex);
+        }
 
         self.gl.use_program(Some(&self.program));
         self.gl.enable(Gl::BLEND);
@@ -79,7 +90,7 @@ impl Renderer {
         // The atlas pixel data in CPU memory is still valid; mark it dirty so
         // the full texture is re-uploaded on the next frame.
         self.atlas.invalidate_gpu_cache();
-        self.init_atlas_texture();
+        self.init_atlas_textures();
         self.resize(self.width, self.height);
 
         self.context_valid = true;
@@ -94,6 +105,12 @@ impl Renderer {
 
     pub fn set_font_bytes(&mut self, bytes: Vec<u8>) {
         self.atlas.set_font_bytes(bytes);
+        // Font changed — reset to one texture for the single page.
+        self.atlas_textures.clear();
+        if let Ok(tex) = create_atlas_texture(&self.gl) {
+            self.atlas_textures.push(tex);
+        }
+        self.init_atlas_textures();
     }
 
     /// Returns a mutable reference to the text atlas so that callers can
@@ -109,32 +126,68 @@ impl Renderer {
         if !self.context_valid {
             return Ok(());
         }
+        self.sync_atlas_textures()?;
         self.upload_atlas_if_needed();
         self.draw_batch(batch)
     }
 
-    fn init_atlas_texture(&mut self) {
+    /// Ensure we have GPU textures for all atlas pages.
+    fn sync_atlas_textures(&mut self) -> Result<(), JsValue> {
+        while self.atlas_textures.len() < self.atlas.page_count() {
+            let tex = create_atlas_texture(&self.gl)?;
+            let page_idx = self.atlas_textures.len();
+            let (pw, ph) = self.atlas.page_dimensions();
+
+            // Initialize the new texture with the page's pixel data.
+            self.gl.bind_texture(Gl::TEXTURE_2D, Some(&tex));
+            self.gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MIN_FILTER, Gl::LINEAR as i32);
+            self.gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MAG_FILTER, Gl::LINEAR as i32);
+            self.gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_S, Gl::CLAMP_TO_EDGE as i32);
+            self.gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_T, Gl::CLAMP_TO_EDGE as i32);
+            let data = self.atlas.page_pixels(page_idx);
+            self.gl
+                .tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+                    Gl::TEXTURE_2D,
+                    0,
+                    Gl::R8 as i32,
+                    pw as i32,
+                    ph as i32,
+                    0,
+                    Gl::RED,
+                    Gl::UNSIGNED_BYTE,
+                    Some(data),
+                )
+                .ok();
+
+            self.atlas_textures.push(tex);
+        }
+        Ok(())
+    }
+
+    /// Initialize all atlas textures (used at creation and after context restore).
+    fn init_atlas_textures(&mut self) {
         let gl = &self.gl;
-        gl.bind_texture(Gl::TEXTURE_2D, Some(&self.atlas_texture));
-        gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MIN_FILTER, Gl::LINEAR as i32);
-        gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MAG_FILTER, Gl::LINEAR as i32);
-        gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_S, Gl::CLAMP_TO_EDGE as i32);
-        gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_T, Gl::CLAMP_TO_EDGE as i32);
-        let data = self.atlas.pixels();
-        let width = 1024;
-        let height = 1024;
-        gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
-            Gl::TEXTURE_2D,
-            0,
-            Gl::R8 as i32,
-            width,
-            height,
-            0,
-            Gl::RED,
-            Gl::UNSIGNED_BYTE,
-            Some(data),
-        )
-        .ok();
+        let (pw, ph) = self.atlas.page_dimensions();
+        for (i, tex) in self.atlas_textures.iter().enumerate() {
+            gl.bind_texture(Gl::TEXTURE_2D, Some(tex));
+            gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MIN_FILTER, Gl::LINEAR as i32);
+            gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MAG_FILTER, Gl::LINEAR as i32);
+            gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_S, Gl::CLAMP_TO_EDGE as i32);
+            gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_T, Gl::CLAMP_TO_EDGE as i32);
+            let data = self.atlas.page_pixels(i);
+            gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+                Gl::TEXTURE_2D,
+                0,
+                Gl::R8 as i32,
+                pw as i32,
+                ph as i32,
+                0,
+                Gl::RED,
+                Gl::UNSIGNED_BYTE,
+                Some(data),
+            )
+            .ok();
+        }
         self.atlas.mark_clean();
     }
 
@@ -143,20 +196,24 @@ impl Renderer {
             return;
         }
         let gl = &self.gl;
-        gl.bind_texture(Gl::TEXTURE_2D, Some(&self.atlas_texture));
-        let data = self.atlas.pixels();
-        gl.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_opt_u8_array(
-            Gl::TEXTURE_2D,
-            0,
-            0,
-            0,
-            1024,
-            1024,
-            Gl::RED,
-            Gl::UNSIGNED_BYTE,
-            Some(data),
-        )
-        .ok();
+        let (pw, ph) = self.atlas.page_dimensions();
+        for (i, data) in self.atlas.dirty_pages() {
+            if let Some(tex) = self.atlas_textures.get(i) {
+                gl.bind_texture(Gl::TEXTURE_2D, Some(tex));
+                gl.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_opt_u8_array(
+                    Gl::TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    pw as i32,
+                    ph as i32,
+                    Gl::RED,
+                    Gl::UNSIGNED_BYTE,
+                    Some(data),
+                )
+                .ok();
+            }
+        }
         self.atlas.mark_clean();
     }
 
@@ -217,7 +274,7 @@ impl Renderer {
 
         for cmd in &batch.commands {
             match cmd.material {
-                Material::TextAtlas => self.bind_text_texture(),
+                Material::TextAtlas => self.bind_text_texture(0),
                 Material::Solid => self.unbind_text_texture(),
                 _ => self.unbind_text_texture(),
             }
@@ -245,10 +302,12 @@ impl Renderer {
         Ok(())
     }
 
-    fn bind_text_texture(&self) {
+    fn bind_text_texture(&self, page_idx: usize) {
         let gl = &self.gl;
         gl.active_texture(Gl::TEXTURE0);
-        gl.bind_texture(Gl::TEXTURE_2D, Some(&self.atlas_texture));
+        if let Some(tex) = self.atlas_textures.get(page_idx) {
+            gl.bind_texture(Gl::TEXTURE_2D, Some(tex));
+        }
         if let Some(loc) = gl.get_uniform_location(&self.program, "u_use_texture") {
             gl.uniform1i(Some(&loc), 1);
         }
@@ -317,15 +376,20 @@ pub fn resolve_text_runs(batch: &mut Batch, atlas: &mut TextAtlas) {
     }
 }
 
-/// Create all GPU resources (shader program, VBO, IBO, atlas texture).
+/// Create GPU resources (shader program, VBO, IBO) — but not atlas textures,
+/// since those are managed separately per page.
 ///
 /// This is called both at initial construction and after context restoration.
-fn create_gpu_resources(gl: &Gl) -> Result<(WebGlProgram, WebGlBuffer, WebGlBuffer, WebGlTexture), JsValue> {
+fn create_gpu_resources(gl: &Gl) -> Result<(WebGlProgram, WebGlBuffer, WebGlBuffer), JsValue> {
     let program = link_program(gl, VERT_SHADER, FRAG_SHADER)?;
     let vbo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no vbo"))?;
     let ibo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no ibo"))?;
-    let atlas_texture = gl.create_texture().ok_or_else(|| JsValue::from_str("no texture"))?;
-    Ok((program, vbo, ibo, atlas_texture))
+    Ok((program, vbo, ibo))
+}
+
+/// Create a single atlas texture with standard parameters.
+fn create_atlas_texture(gl: &Gl) -> Result<WebGlTexture, JsValue> {
+    gl.create_texture().ok_or_else(|| JsValue::from_str("no texture"))
 }
 
 fn compile_shader(gl: &Gl, source: &str, shader_type: u32) -> Result<WebGlShader, JsValue> {
