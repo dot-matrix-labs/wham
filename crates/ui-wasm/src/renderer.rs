@@ -13,8 +13,17 @@ use crate::icon_atlas::IconAtlas;
 pub struct Renderer {
     gl: Gl,
     program: WebGlProgram,
-    vbo: WebGlBuffer,
-    ibo: WebGlBuffer,
+    /// Double-buffered vertex buffer objects.
+    ///
+    /// Alternating between two VBOs each frame avoids a GPU pipeline stall:
+    /// the GPU can rasterize frame N from `vbos[read_slot]` while the CPU
+    /// uploads frame N+1 data into `vbos[write_slot]`.  The slot indices are
+    /// flipped by [`next_slot`] at the start of every render.
+    vbos: [WebGlBuffer; 2],
+    /// Double-buffered index buffer objects (mirrors `vbos`).
+    ibos: [WebGlBuffer; 2],
+    /// Index of the VBO/IBO pair currently being written (0 or 1).
+    write_slot: usize,
     atlas: TextAtlas,
     /// One GPU texture per atlas page.
     atlas_textures: Vec<WebGlTexture>,
@@ -57,13 +66,11 @@ pub struct Renderer {
     /// `a_flags` attribute index.
     aloc_flags: u32,
 
-    /// Number of floats currently allocated in the VBO on the GPU.
-    /// Used to decide whether `bufferSubData` is safe (i.e. the new data
-    /// fits within the already-allocated GPU buffer) or a full
-    /// `bufferData` reallocation is needed.
-    vbo_capacity_floats: usize,
-    /// Number of u32 indices currently allocated in the IBO on the GPU.
-    ibo_capacity_indices: usize,
+    /// Number of floats allocated in each VBO slot.
+    /// Used to decide whether `bufferSubData` is safe for the current slot.
+    vbo_capacity_floats: [usize; 2],
+    /// Number of u32 indices allocated in each IBO slot.
+    ibo_capacity_indices: [usize; 2],
 
     // -----------------------------------------------------------------------
     // Instanced rendering resources.
@@ -104,7 +111,7 @@ impl Renderer {
             .ok_or_else(|| JsValue::from_str("WebGL2 not supported"))?
             .dyn_into()?;
 
-        let (program, vbo, ibo) = create_gpu_resources(&gl)?;
+        let (program, vbos, ibos) = create_gpu_resources(&gl)?;
         let (inst_program, inst_attr_vbo, unit_quad_vbo, unit_quad_ibo) =
             create_instanced_resources(&gl)?;
 
@@ -120,8 +127,9 @@ impl Renderer {
         let mut renderer = Self {
             gl,
             program,
-            vbo,
-            ibo,
+            vbos,
+            ibos,
+            write_slot: 0,
             atlas: TextAtlas::new(1024, 1024),
             atlas_textures,
             icon_atlas: IconAtlas::new(),
@@ -138,8 +146,8 @@ impl Renderer {
             aloc_uv: 0,
             aloc_color: 0,
             aloc_flags: 0,
-            vbo_capacity_floats: 0,
-            ibo_capacity_indices: 0,
+            vbo_capacity_floats: [0; 2],
+            ibo_capacity_indices: [0; 2],
             inst_program,
             inst_attr_vbo,
             unit_quad_vbo,
@@ -173,13 +181,14 @@ impl Renderer {
     /// need to recreate shaders, programs, buffers, textures, and re-upload
     /// the glyph atlas.
     pub fn reinitialize(&mut self) -> Result<(), JsValue> {
-        let (program, vbo, ibo) = create_gpu_resources(&self.gl)?;
+        let (program, vbos, ibos) = create_gpu_resources(&self.gl)?;
         let (inst_program, inst_attr_vbo, unit_quad_vbo, unit_quad_ibo) =
             create_instanced_resources(&self.gl)?;
 
         self.program = program;
-        self.vbo = vbo;
-        self.ibo = ibo;
+        self.vbos = vbos;
+        self.ibos = ibos;
+        self.write_slot = 0;
         self.inst_program = inst_program;
         self.inst_attr_vbo = inst_attr_vbo;
         self.unit_quad_vbo = unit_quad_vbo;
@@ -208,8 +217,8 @@ impl Renderer {
         self.resize(self.width, self.height);
 
         // New GPU buffers have no allocated capacity yet.
-        self.vbo_capacity_floats = 0;
-        self.ibo_capacity_indices = 0;
+        self.vbo_capacity_floats = [0; 2];
+        self.ibo_capacity_indices = [0; 2];
 
         self.context_valid = true;
         Ok(())
@@ -438,6 +447,12 @@ impl Renderer {
         batch: &Batch,
         dirty: Option<&DirtyTracker>,
     ) -> Result<(), JsValue> {
+        // Advance write slot: alternate between 0 and 1 each frame.
+        // The GPU reads from the previously submitted slot while the CPU
+        // writes into the current slot — the two never alias.
+        self.write_slot = 1 - self.write_slot;
+        let slot = self.write_slot;
+
         let gl = &self.gl;
         gl.use_program(Some(&self.program));
 
@@ -454,16 +469,16 @@ impl Renderer {
         //
         // Conditions for partial update:
         // 1. dirty tracker is present and reports a partial-dirty frame.
-        // 2. The new data fits within the GPU buffer already allocated (i.e.
-        //    the vertex/index counts did not grow since last frame).
+        // 2. The new data fits within the GPU buffer already allocated for
+        //    this slot (i.e. the vertex/index counts did not grow).
         let use_partial = dirty
             .map(|t| !t.is_fully_dirty())
             .unwrap_or(false)
-            && total_floats <= self.vbo_capacity_floats
-            && total_indices <= self.ibo_capacity_indices;
+            && total_floats <= self.vbo_capacity_floats[slot]
+            && total_indices <= self.ibo_capacity_indices[slot];
 
-        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.vbo));
-        gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&self.ibo));
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.vbos[slot]));
+        gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&self.ibos[slot]));
 
         if use_partial {
             // Partial update: only upload vertex ranges for dirty widgets.
@@ -550,9 +565,9 @@ impl Renderer {
                 );
             }
 
-            // Record new GPU buffer capacities.
-            self.vbo_capacity_floats = total_floats;
-            self.ibo_capacity_indices = total_indices;
+            // Record new GPU buffer capacities for this slot.
+            self.vbo_capacity_floats[slot] = total_floats;
+            self.ibo_capacity_indices[slot] = total_indices;
         }
 
         {
@@ -593,11 +608,11 @@ impl Renderer {
                 && cmd.count >= INSTANCED_THRESHOLD_QUADS * 6
             {
                 self.draw_instanced_solid(cmd, &vertices, &indices);
-                // Restore main program and main VBO/IBO bindings after instanced draw.
+                // Restore main program and double-buffered VBO/IBO bindings after instanced draw.
                 let gl = &self.gl;
                 gl.use_program(Some(&self.program));
-                gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.vbo));
-                gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&self.ibo));
+                gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.vbos[slot]));
+                gl.bind_buffer(Gl::ELEMENT_ARRAY_BUFFER, Some(&self.ibos[slot]));
                 continue;
             }
 
@@ -842,11 +857,18 @@ pub fn resolve_text_runs(batch: &mut Batch, atlas: &mut TextAtlas) {
 /// since those are managed separately per page.
 ///
 /// This is called both at initial construction and after context restoration.
-fn create_gpu_resources(gl: &Gl) -> Result<(WebGlProgram, WebGlBuffer, WebGlBuffer), JsValue> {
+/// Create the main shader program plus two VBO/IBO pairs for double-buffering.
+///
+/// Returns (program, [vbo_a, vbo_b], [ibo_a, ibo_b]).
+fn create_gpu_resources(
+    gl: &Gl,
+) -> Result<(WebGlProgram, [WebGlBuffer; 2], [WebGlBuffer; 2]), JsValue> {
     let program = link_program(gl, VERT_SHADER, FRAG_SHADER)?;
-    let vbo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no vbo"))?;
-    let ibo = gl.create_buffer().ok_or_else(|| JsValue::from_str("no ibo"))?;
-    Ok((program, vbo, ibo))
+    let vbo_a = gl.create_buffer().ok_or_else(|| JsValue::from_str("no vbo_a"))?;
+    let vbo_b = gl.create_buffer().ok_or_else(|| JsValue::from_str("no vbo_b"))?;
+    let ibo_a = gl.create_buffer().ok_or_else(|| JsValue::from_str("no ibo_a"))?;
+    let ibo_b = gl.create_buffer().ok_or_else(|| JsValue::from_str("no ibo_b"))?;
+    Ok((program, [vbo_a, vbo_b], [ibo_a, ibo_b]))
 }
 
 /// Create GPU resources for the instanced solid-quad rendering path.
