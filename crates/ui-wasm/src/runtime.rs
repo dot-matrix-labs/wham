@@ -73,8 +73,10 @@ impl<A: FormApp> WasmRuntime<A> {
         self.clipboard_request = self.ui.take_clipboard_request();
         let mut batch = self.ui.take_batch();
 
-        // Resolve text runs into vertex quads (rasterization + quad generation)
+        // Advance the atlas frame counter for LRU tracking, then resolve
+        // text runs into vertex quads (rasterization + quad generation)
         // BEFORE the render pass, so the renderer receives a complete batch.
+        self.renderer.atlas_mut().begin_frame();
         resolve_text_runs(&mut batch, self.renderer.atlas_mut());
         self.renderer.render(&batch)?;
 
