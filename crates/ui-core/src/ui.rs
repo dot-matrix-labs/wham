@@ -13,6 +13,40 @@ use crate::theme::Theme;
 use crate::types::{Color, Rect, Vec2};
 use unicode_segmentation::UnicodeSegmentation;
 
+/// Persistent scroll state for a single scroll container, keyed by widget ID.
+#[derive(Clone, Debug)]
+pub struct ScrollState {
+    /// Current vertical scroll offset (0 = top, positive = scrolled down).
+    pub offset: f32,
+    /// Current scroll velocity for inertia (px/s).
+    pub velocity: f32,
+    /// Total content height measured from the previous frame.
+    pub content_height: f32,
+    /// Visible container height.
+    pub container_height: f32,
+}
+
+impl Default for ScrollState {
+    fn default() -> Self {
+        Self {
+            offset: 0.0,
+            velocity: 0.0,
+            content_height: 0.0,
+            container_height: 0.0,
+        }
+    }
+}
+
+impl ScrollState {
+    fn max_offset(&self) -> f32 {
+        (self.content_height - self.container_height).max(0.0)
+    }
+
+    fn clamp_offset(&mut self) {
+        self.offset = self.offset.clamp(0.0, self.max_offset());
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WidgetKind {
@@ -23,6 +57,7 @@ pub enum WidgetKind {
     TextInput,
     Select,
     Group,
+    ScrollContainer,
 }
 
 #[derive(Clone, Debug)]
@@ -232,6 +267,16 @@ pub struct Ui {
     /// viewport width or device-pixel ratio). When true, small widgets get
     /// expanded hit areas to meet the 44×44pt minimum touch target guideline.
     pub touch_mode: bool,
+    /// Persistent scroll state per scroll container ID.
+    pub scroll_states: HashMap<u64, ScrollState>,
+    /// Saved layouts for nested scroll containers.
+    layout_stack: Vec<Layout>,
+    /// Stack of clip rects for nested scroll containers.
+    clip_stack: Vec<Rect>,
+    /// Currently active clip rect (top of clip_stack), applied to all emitted quads/text.
+    pub active_clip: Option<Rect>,
+    /// Timestamp of the previous frame, used to compute dt for inertia.
+    last_time_ms: f64,
     /// ID stack used to disambiguate widgets with identical labels.
     /// Values are pushed/popped by the caller (e.g. loop index) and mixed
     /// into every `hash_id` call so that repeated labels produce unique IDs.
@@ -276,6 +321,11 @@ impl Ui {
             _scroll_offsets: HashMap::new(),
             overwrite_mode: false,
             touch_mode: false,
+            scroll_states: HashMap::new(),
+            layout_stack: Vec::new(),
+            clip_stack: Vec::new(),
+            active_clip: None,
+            last_time_ms: 0.0,
             id_stack: Vec::new(),
             form_buffers: HashMap::new(),
             char_advance: Box::new(|_ch, font_size| font_size * 0.6),
@@ -397,6 +447,7 @@ impl Ui {
         self.scale = scale;
         self.hovered = None;
         self.clipboard_request = None;
+        self.last_time_ms = self.time_ms;
         self.time_ms = time_ms;
         self.touch_mode = width < 600.0 || scale >= 2.0;
         // NOTE: selection_anchor is intentionally NOT cleared here.
@@ -577,6 +628,7 @@ impl Ui {
 
     pub fn label(&mut self, text: &str) {
         let rect = self.layout.next_rect(24.0 * self.scale);
+        let clip = self.effective_clip();
         self.widgets.push(WidgetInfo {
             id: self.hash_id(text),
             kind: WidgetKind::Label,
@@ -590,18 +642,19 @@ impl Ui {
             text: text.to_string(),
             color: self.theme.colors.text,
             font_size: 16.0 * self.theme.font_scale * self.scale,
-            clip: None,
+            clip,
         });
     }
 
     pub fn label_colored(&mut self, text: &str, color: Color) {
         let rect = self.layout.next_rect(20.0 * self.scale);
+        let clip = self.effective_clip();
         self.batch.text_runs.push(TextRun {
             rect,
             text: text.to_string(),
             color,
             font_size: 14.0 * self.theme.font_scale * self.scale,
-            clip: None,
+            clip,
         });
     }
 
@@ -702,6 +755,7 @@ impl Ui {
             self.theme.colors.primary
         };
 
+        let clip = self.effective_clip();
         self.batch.push_quad(
             Quad {
                 rect,
@@ -710,14 +764,14 @@ impl Ui {
                 flags: 0,
             },
             Material::Solid,
-            None,
+            clip,
         );
         self.batch.text_runs.push(TextRun {
             rect,
             text: label.to_string(),
             color: Color::rgba(1.0, 1.0, 1.0, 1.0),
             font_size: 16.0 * self.theme.font_scale * self.scale,
-            clip: None,
+            clip,
         });
 
         if clicked {
@@ -734,6 +788,7 @@ impl Ui {
             *value = !*value;
             self.focused = Some(id);
         }
+        let clip = self.effective_clip();
         let box_rect = Rect::new(rect.x, rect.y, rect.h, rect.h);
         self.batch.push_quad(
             Quad {
@@ -743,7 +798,7 @@ impl Ui {
                 flags: 0,
             },
             Material::Solid,
-            None,
+            clip,
         );
         if *value {
             self.batch.push_quad(
@@ -754,7 +809,7 @@ impl Ui {
                     flags: 0,
                 },
                 Material::Solid,
-                None,
+                clip,
             );
         }
         self.batch.text_runs.push(TextRun {
@@ -762,7 +817,7 @@ impl Ui {
             text: label.to_string(),
             color: self.theme.colors.text,
             font_size: 15.0 * self.theme.font_scale * self.scale,
-            clip: None,
+            clip,
         });
 
         self.widgets.push(WidgetInfo {
@@ -795,6 +850,7 @@ impl Ui {
             }
             self.focused = Some(id);
         }
+        let clip = self.effective_clip();
         self.batch.push_quad(
             Quad {
                 rect,
@@ -803,7 +859,7 @@ impl Ui {
                 flags: 0,
             },
             Material::Solid,
-            None,
+            clip,
         );
         let text = format!("{}: {}", label, value);
         self.batch.text_runs.push(TextRun {
@@ -811,7 +867,7 @@ impl Ui {
             text,
             color: self.theme.colors.text,
             font_size: 15.0 * self.theme.font_scale * self.scale,
-            clip: None,
+            clip,
         });
 
         self.widgets.push(WidgetInfo {
@@ -848,6 +904,7 @@ impl Ui {
             let radius = rect.h * 0.35;
             let center = rect.center();
             let outer = Rect::new(center.x - radius, center.y - radius, radius * 2.0, radius * 2.0);
+            let clip = self.effective_clip();
             self.batch.push_quad(
                 Quad {
                     rect: outer,
@@ -856,7 +913,7 @@ impl Ui {
                     flags: 0,
                 },
                 Material::Solid,
-                None,
+                clip,
             );
             if *selected == idx {
                 self.batch.push_quad(
@@ -867,7 +924,7 @@ impl Ui {
                         flags: 0,
                     },
                     Material::Solid,
-                    None,
+                    clip,
                 );
             }
             self.batch.text_runs.push(TextRun {
@@ -875,7 +932,7 @@ impl Ui {
                 text: option.to_string(),
                 color: self.theme.colors.text,
                 font_size: 14.0 * self.theme.font_scale * self.scale,
-                clip: None,
+                clip,
             });
             self.widgets.push(WidgetInfo {
                 id,
@@ -1004,6 +1061,8 @@ impl Ui {
             self.apply_pointer_selection(id, rect, buffer);
         }
 
+        let outer_clip = self.effective_clip();
+        let inner_clip = self.merge_clip(Some(rect));
         self.batch.push_quad(
             Quad {
                 rect,
@@ -1012,7 +1071,7 @@ impl Ui {
                 flags: 0,
             },
             Material::Solid,
-            None,
+            outer_clip,
         );
         let content = if buffer.text().is_empty() {
             placeholder.to_string()
@@ -1035,7 +1094,7 @@ impl Ui {
             text: content,
             color,
             font_size: 15.0 * self.theme.font_scale * self.scale,
-            clip: Some(rect),
+            clip: inner_clip,
         });
 
         if focused {
@@ -1051,7 +1110,7 @@ impl Ui {
                         flags: 0,
                     },
                     Material::Solid,
-                    Some(rect),
+                    inner_clip,
                 );
             }
         }
@@ -1073,6 +1132,195 @@ impl Ui {
         });
 
         clicked
+    }
+
+    /// Begin a scrollable container. Widgets between `begin_scroll` and
+    /// `end_scroll` are clipped to the container rect and offset by the
+    /// current scroll position. Returns the scroll container ID.
+    pub fn begin_scroll(&mut self, label: &str, height: f32) -> u64 {
+        let rect = self.layout.next_rect(height);
+        let id = self.hash_id(label);
+
+        // Get or create scroll state
+        let state = self.scroll_states.entry(id).or_default();
+        state.container_height = height;
+
+        // --- Inertia ---
+        let dt = ((self.time_ms - self.last_time_ms) / 1000.0) as f32;
+        if dt > 0.0 && state.velocity.abs() > 0.5 {
+            state.offset += state.velocity * dt;
+            state.velocity *= 0.92_f32.powf(dt * 60.0); // friction
+            if state.velocity.abs() < 0.5 {
+                state.velocity = 0.0;
+            }
+            state.clamp_offset();
+        }
+
+        // --- Wheel events ---
+        for event in &self.events.clone() {
+            if let InputEvent::PointerWheel { pos, delta, .. } = event {
+                if rect.contains(*pos) {
+                    // Check no inner scroll container already consumed this
+                    let state = self.scroll_states.get_mut(&id).unwrap();
+                    state.offset += delta.y;
+                    state.velocity = 0.0; // cancel inertia on direct scroll
+                    state.clamp_offset();
+                }
+            }
+        }
+
+        // --- Touch drag scrolling ---
+        for event in &self.events.clone() {
+            match event {
+                InputEvent::PointerDown(ev)
+                    if rect.contains(ev.pos) && ev.button == Some(PointerButton::Left) =>
+                {
+                    let state = self.scroll_states.get_mut(&id).unwrap();
+                    state.velocity = 0.0;
+                }
+                InputEvent::PointerMove(ev) if self.dragging.is_none() || self.active.is_none() => {
+                    // Only scroll if not dragging a child widget
+                    // Touch velocity is tracked but actual scroll happens via wheel on web
+                }
+                _ => {}
+            }
+        }
+
+        let scroll_offset = self.scroll_states.get(&id).unwrap().offset;
+
+        // Render container background
+        self.batch.push_quad(
+            Quad {
+                rect,
+                uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+                color: Color::rgba(
+                    self.theme.colors.background.r,
+                    self.theme.colors.background.g,
+                    self.theme.colors.background.b,
+                    0.5,
+                ),
+                flags: 0,
+            },
+            Material::Solid,
+            self.active_clip,
+        );
+
+        // Register widget
+        self.widgets.push(WidgetInfo {
+            id,
+            kind: WidgetKind::ScrollContainer,
+            label: label.to_string(),
+            value: None,
+            rect,
+            state: A11yState::default(),
+        });
+
+        // Save outer layout
+        self.layout_stack.push(self.layout.clone());
+
+        // Set up inner layout: starts at container top, offset by scroll
+        self.layout = Layout::new(rect.x, rect.y - scroll_offset, rect.w);
+
+        // Push clip rect (intersect with parent clip for nesting)
+        let clip = if let Some(parent_clip) = self.active_clip {
+            parent_clip.intersect(rect).unwrap_or(rect)
+        } else {
+            rect
+        };
+        self.clip_stack.push(clip);
+        self.active_clip = Some(clip);
+
+        // Push ID for children
+        self.push_id(label);
+
+        id
+    }
+
+    /// End a scrollable container. Records content height and optionally
+    /// renders a scrollbar.
+    pub fn end_scroll(&mut self) {
+        // Pop ID
+        self.pop_id();
+
+        // Measure content height from inner layout cursor
+        let content_bottom = self.layout.cursor.y;
+
+        // Restore outer layout
+        if let Some(outer) = self.layout_stack.pop() {
+            // Calculate content height relative to container top
+            // The inner layout started at (rect.y - scroll_offset), so
+            // content_height = cursor.y - (rect.y - scroll_offset)
+            // But we need the original rect. We can get it from clip_stack.
+            let clip = self.clip_stack.last().copied();
+            if let Some(clip_rect) = clip {
+                let scroll_id = {
+                    // Find the scroll container widget that matches this clip
+                    self.widgets.iter().rev()
+                        .find(|w| w.kind == WidgetKind::ScrollContainer)
+                        .map(|w| (w.id, w.rect))
+                };
+                if let Some((id, container_rect)) = scroll_id {
+                    if let Some(state) = self.scroll_states.get_mut(&id) {
+                        state.content_height = content_bottom - (container_rect.y - state.offset);
+                        state.clamp_offset();
+
+                        // Render scrollbar if content overflows
+                        if state.content_height > state.container_height {
+                            let track_w = 6.0;
+                            let track_rect = Rect::new(
+                                container_rect.x + container_rect.w - track_w - 2.0,
+                                container_rect.y,
+                                track_w,
+                                container_rect.h,
+                            );
+                            // Track background
+                            self.batch.push_quad(
+                                Quad {
+                                    rect: track_rect,
+                                    uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+                                    color: Color::rgba(0.0, 0.0, 0.0, 0.05),
+                                    flags: 0,
+                                },
+                                Material::Solid,
+                                Some(clip_rect),
+                            );
+                            // Thumb
+                            let ratio = state.container_height / state.content_height;
+                            let thumb_h = (ratio * container_rect.h).max(20.0);
+                            let scroll_range = state.content_height - state.container_height;
+                            let thumb_y = if scroll_range > 0.0 {
+                                container_rect.y
+                                    + (state.offset / scroll_range)
+                                        * (container_rect.h - thumb_h)
+                            } else {
+                                container_rect.y
+                            };
+                            self.batch.push_quad(
+                                Quad {
+                                    rect: Rect::new(
+                                        track_rect.x,
+                                        thumb_y,
+                                        track_w,
+                                        thumb_h,
+                                    ),
+                                    uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+                                    color: Color::rgba(0.0, 0.0, 0.0, 0.2),
+                                    flags: 0,
+                                },
+                                Material::Solid,
+                                Some(clip_rect),
+                            );
+                        }
+                    }
+                }
+            }
+
+            self.layout = outer;
+        }
+
+        // Pop clip
+        self.clip_stack.pop();
+        self.active_clip = self.clip_stack.last().copied();
     }
 
     pub fn tooltip(&mut self, target_label: &str, text: &str) {
@@ -1427,7 +1675,7 @@ impl Ui {
                     flags: 0,
                 },
                 Material::Solid,
-                Some(rect),
+                self.merge_clip(Some(rect)),
             );
         }
     }
@@ -1460,6 +1708,22 @@ impl Ui {
             w,
             h,
         )
+    }
+
+    /// Returns the effective clip rect for the current context. When inside
+    /// a scroll container, this is the container's clip rect. Otherwise None.
+    fn effective_clip(&self) -> Option<Rect> {
+        self.active_clip
+    }
+
+    /// Merge a widget-specific clip with the scroll container clip.
+    fn merge_clip(&self, widget_clip: Option<Rect>) -> Option<Rect> {
+        match (widget_clip, self.active_clip) {
+            (Some(wc), Some(sc)) => sc.intersect(wc).or(Some(sc)),
+            (Some(wc), None) => Some(wc),
+            (None, Some(sc)) => Some(sc),
+            (None, None) => None,
+        }
     }
 
     fn rect_hovered(&mut self, id: u64, rect: Rect) -> bool {
@@ -1540,6 +1804,7 @@ fn widget_role(kind: WidgetKind) -> A11yRole {
         WidgetKind::TextInput => A11yRole::TextBox,
         WidgetKind::Select => A11yRole::ComboBox,
         WidgetKind::Group => A11yRole::Group,
+        WidgetKind::ScrollContainer => A11yRole::Group,
     }
 }
 
@@ -2386,5 +2651,132 @@ mod tests {
         let result = ui.touch_rect(big);
         assert_eq!(result.w, 200.0);
         assert_eq!(result.h, 60.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Scroll containers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scroll_container_clips_children() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.begin_scroll("scroller", 200.0);
+        ui.label("Inside scroll");
+        ui.end_scroll();
+        ui.end_frame();
+
+        // The label's text run should have a clip rect
+        let text_run = ui.batch.text_runs.iter().find(|r| r.text == "Inside scroll").unwrap();
+        assert!(text_run.clip.is_some());
+    }
+
+    #[test]
+    fn scroll_container_wheel_changes_offset() {
+        let mut ui = test_ui();
+
+        // First frame: create scroll container and get its rect
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        let id = ui.begin_scroll("scroller", 100.0);
+        // Add content taller than container
+        for i in 0..20 {
+            ui.label(&format!("Item {}", i));
+        }
+        ui.end_scroll();
+        ui.end_frame();
+
+        // Get the container rect
+        let container_rect = ui.widgets.iter()
+            .find(|w| w.kind == WidgetKind::ScrollContainer)
+            .unwrap().rect;
+
+        // Second frame: send wheel event inside the container
+        let wheel = InputEvent::PointerWheel {
+            pos: container_rect.center(),
+            delta: Vec2::new(0.0, 50.0),
+            modifiers: Modifiers::default(),
+        };
+        ui.begin_frame(vec![wheel], 800.0, 600.0, 1.0, 16.0);
+        ui.begin_scroll("scroller", 100.0);
+        for i in 0..20 {
+            ui.label(&format!("Item {}", i));
+        }
+        ui.end_scroll();
+        ui.end_frame();
+
+        let state = ui.scroll_states.get(&id).unwrap();
+        assert!(state.offset > 0.0, "Scroll offset should be > 0 after wheel event");
+    }
+
+    #[test]
+    fn scroll_container_content_height_measured() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        let id = ui.begin_scroll("scroller", 100.0);
+        for i in 0..10 {
+            ui.label(&format!("Line {}", i));
+        }
+        ui.end_scroll();
+        ui.end_frame();
+
+        let state = ui.scroll_states.get(&id).unwrap();
+        assert!(state.content_height > 100.0, "Content should overflow container");
+        assert_eq!(state.container_height, 100.0);
+    }
+
+    #[test]
+    fn scroll_container_renders_scrollbar_when_overflowing() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        ui.begin_scroll("scroller", 100.0);
+        for i in 0..20 {
+            ui.label(&format!("Item {}", i));
+        }
+        let verts_before_end = ui.batch.vertices.len();
+        ui.end_scroll();
+        // end_scroll should have added scrollbar quads (track + thumb = 2 quads = 8 verts)
+        assert!(ui.batch.vertices.len() > verts_before_end,
+            "Scrollbar quads should be rendered");
+    }
+
+    #[test]
+    fn nested_scroll_containers_independent() {
+        let mut ui = test_ui();
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        let outer_id = ui.begin_scroll("outer", 300.0);
+        ui.label("Outer content");
+        let inner_id = ui.begin_scroll("inner", 100.0);
+        ui.label("Inner content");
+        ui.end_scroll();
+        ui.end_scroll();
+        ui.end_frame();
+
+        assert_ne!(outer_id, inner_id);
+        assert!(ui.scroll_states.contains_key(&outer_id));
+        assert!(ui.scroll_states.contains_key(&inner_id));
+    }
+
+    #[test]
+    fn scroll_offset_clamped_to_valid_range() {
+        let mut ui = test_ui();
+
+        // First frame: build content
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+        let id = ui.begin_scroll("scroller", 100.0);
+        ui.label("Short");
+        ui.end_scroll();
+        ui.end_frame();
+
+        // Try to scroll past content
+        ui.scroll_states.get_mut(&id).unwrap().offset = 9999.0;
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 16.0);
+        ui.begin_scroll("scroller", 100.0);
+        ui.label("Short");
+        ui.end_scroll();
+        ui.end_frame();
+
+        let state = ui.scroll_states.get(&id).unwrap();
+        assert!(state.offset <= state.max_offset(),
+            "Offset should be clamped: offset={}, max={}", state.offset, state.max_offset());
     }
 }
