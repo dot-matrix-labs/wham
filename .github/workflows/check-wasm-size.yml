@@ -1,0 +1,69 @@
+name: WASM Binary Size Check
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  wasm-size:
+    name: Check WASM binary size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+
+      - name: Build WASM
+        run: cd crates/ui-wasm && wasm-pack build --target web --out-dir ../../examples/web/pkg
+
+      - name: Check binary size
+        run: |
+          WASM_FILE=$(find examples/web/pkg -name '*.wasm' -type f | head -1)
+          if [ -z "$WASM_FILE" ]; then
+            echo "ERROR: No .wasm file found"
+            exit 1
+          fi
+
+          RAW_SIZE=$(wc -c < "$WASM_FILE")
+          GZIP_SIZE=$(gzip -c "$WASM_FILE" | wc -c)
+          RAW_KB=$((RAW_SIZE / 1024))
+          GZIP_KB=$((GZIP_SIZE / 1024))
+
+          echo "## WASM Binary Size" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Size |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Raw | ${RAW_KB} KB (${RAW_SIZE} bytes) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Gzipped | ${GZIP_KB} KB (${GZIP_SIZE} bytes) |" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Raw size: ${RAW_KB} KB (${RAW_SIZE} bytes)"
+          echo "Gzipped size: ${GZIP_KB} KB (${GZIP_SIZE} bytes)"
+
+          MAX_GZIP_BYTES=460800  # 450 KB
+          if [ "$GZIP_SIZE" -gt "$MAX_GZIP_BYTES" ]; then
+            echo "FAIL: Gzipped WASM binary (${GZIP_KB} KB) exceeds 450 KB limit"
+            exit 1
+          else
+            echo "PASS: Gzipped WASM binary (${GZIP_KB} KB) is within 450 KB limit"
+          fi
