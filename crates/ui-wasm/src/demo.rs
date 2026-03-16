@@ -11,6 +11,9 @@ enum DemoMode {
     Login,
     Dynamic,
     Nested,
+    SignIn,
+    Checkout,
+    Notifications,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -51,6 +54,15 @@ pub struct DemoApp {
     register_password: TextBuffer,
     register_confirm: TextBuffer,
     register_role: String,
+    // Scenario-specific state
+    signin_email: TextBuffer,
+    signin_password: TextBuffer,
+    checkout_first_name: TextBuffer,
+    checkout_last_name: TextBuffer,
+    checkout_email: TextBuffer,
+    checkout_address: TextBuffer,
+    notif_email_enabled: bool,
+    notif_sms_enabled: bool,
 }
 
 impl DemoApp {
@@ -77,7 +89,28 @@ impl DemoApp {
             register_password: TextBuffer::new(""),
             register_confirm: TextBuffer::new(""),
             register_role: "User".to_string(),
+            signin_email: TextBuffer::new(""),
+            signin_password: TextBuffer::new(""),
+            checkout_first_name: TextBuffer::new(""),
+            checkout_last_name: TextBuffer::new(""),
+            checkout_email: TextBuffer::new(""),
+            checkout_address: TextBuffer::new(""),
+            notif_email_enabled: false,
+            notif_sms_enabled: false,
         }
+    }
+
+    /// Switch the active scenario by name.  Called from WASM bindings when the
+    /// host page reads the `?scenario=` query parameter.
+    pub fn set_scenario(&mut self, scenario: &str) {
+        self.mode = match scenario {
+            "sign-in" => DemoMode::SignIn,
+            "checkout" => DemoMode::Checkout,
+            "notifications" => DemoMode::Notifications,
+            "dynamic" => DemoMode::Dynamic,
+            "nested" => DemoMode::Nested,
+            _ => DemoMode::Login,
+        };
     }
 
     fn build_login(&mut self, ui: &mut Ui, timestamp_ms: f64) {
@@ -264,6 +297,44 @@ impl DemoApp {
         self.show_loading(ui, pending);
     }
 
+    fn build_sign_in(&mut self, ui: &mut Ui) {
+        ui.label("Sign In");
+        ui.text_input("Email", &mut self.signin_email, "email@example.com");
+        ui.text_input_masked("Password", &mut self.signin_password, "password");
+        if ui.button("Sign in") {
+            self.status = Some("Signing in...".to_string());
+        }
+        if let Some(status) = &self.status {
+            ui.label(status);
+        }
+    }
+
+    fn build_checkout(&mut self, ui: &mut Ui) {
+        ui.label("Checkout");
+        ui.text_input("First name", &mut self.checkout_first_name, "Jane");
+        ui.text_input("Last name", &mut self.checkout_last_name, "Doe");
+        ui.text_input("Email", &mut self.checkout_email, "email@example.com");
+        ui.text_input("Address", &mut self.checkout_address, "123 Main St");
+        if ui.button("Place order") {
+            self.status = Some("Processing order...".to_string());
+        }
+        if let Some(status) = &self.status {
+            ui.label(status);
+        }
+    }
+
+    fn build_notifications(&mut self, ui: &mut Ui) {
+        ui.label("Notification Settings");
+        ui.checkbox("Email notifications", &mut self.notif_email_enabled);
+        ui.checkbox("SMS alerts", &mut self.notif_sms_enabled);
+        if ui.button("Save changes") {
+            self.status = Some("Settings saved.".to_string());
+        }
+        if let Some(status) = &self.status {
+            ui.label(status);
+        }
+    }
+
     fn submit_form(&mut self, kind: FormKind, form: &mut Form, timestamp_ms: f64) {
         let payload = serde_json::json!({ "timestamp": timestamp_ms });
         match form.start_submit(payload, 2) {
@@ -339,6 +410,23 @@ impl FormApp for DemoApp {
         let timestamp_ms = ui.time_ms();
         self.resolve_pending(timestamp_ms);
 
+        // Scenario modes skip the main nav and render only their content.
+        match self.mode {
+            DemoMode::SignIn => {
+                self.build_sign_in(ui);
+                return;
+            }
+            DemoMode::Checkout => {
+                self.build_checkout(ui);
+                return;
+            }
+            DemoMode::Notifications => {
+                self.build_notifications(ui);
+                return;
+            }
+            _ => {}
+        }
+
         ui.label("GPU Forms UI");
         if ui.button("Login/Register") {
             self.mode = DemoMode::Login;
@@ -354,6 +442,7 @@ impl FormApp for DemoApp {
             DemoMode::Login => self.build_login(ui, timestamp_ms),
             DemoMode::Dynamic => self.build_dynamic(ui, timestamp_ms),
             DemoMode::Nested => self.build_nested(ui, timestamp_ms),
+            _ => unreachable!(),
         }
 
         if let Some(status) = &self.status {

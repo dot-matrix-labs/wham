@@ -96,6 +96,22 @@ impl BrowserSession {
         })
     }
 
+    /// Navigate to `?scenario=<name>` and wait for the app to be ready.
+    /// Drives to a specific demo scenario (sign-in, checkout, notifications).
+    pub fn navigate_to_scenario(&mut self, scenario: &str) {
+        let base = self.url.split('?').next().unwrap_or(&self.url).to_string();
+        let url = format!("{}?scenario={}", base, scenario);
+        let mut cdp = CdpClient::new(&mut self.ws);
+        let _ = cdp.send("Page.navigate", &format!("{{\"url\":\"{}\"}}", url.replace('"', "\\\"")));
+        let _ = wait_for_eval_contains(&mut cdp, "document.readyState", "complete", Duration::from_secs(5));
+        let _ = wait_for_eval_contains(&mut cdp, "window.__app ? \"ready\" : \"\"", "ready", Duration::from_secs(5));
+        // Tick the app to apply the scenario and flush one rendered frame.
+        for _ in 0..3 {
+            let _ = cdp.eval_void("window.__app && (window.__a11y = window.__app.frame(performance.now()))");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+
     /// Navigate to the configured URL and wait for the app to be ready.
     /// After this call the app home screen is visible.
     pub fn navigate_to_app(&mut self) -> Result<(), String> {
