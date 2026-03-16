@@ -37,6 +37,195 @@ impl Default for Config {
     }
 }
 
+/// A live browser session. Created with `BrowserSession::launch`, dropped to
+/// clean up Chrome and the file server.
+pub struct BrowserSession {
+    ws: WebSocket,
+    pub screenshot_dir: Option<std::path::PathBuf>,
+    chrome: Option<Child>,
+    server: Option<Child>,
+    profile_dir: Option<std::path::PathBuf>,
+    pub url: String,
+}
+
+impl BrowserSession {
+    /// Launch Chrome (and optionally a local HTTP server), connect the CDP
+    /// WebSocket, and enable the necessary domains.  Returns `Err` if Chrome
+    /// is not installed — callers should translate that into a graceful skip.
+    pub fn launch(config: &Config) -> Result<Self, String> {
+        let mut server = None;
+        if config.start_server {
+            server = Some(start_server()?);
+            thread::sleep(Duration::from_millis(200));
+        }
+
+        let (chrome, profile_dir, ws_url) = if config.start_chrome {
+            let (child, dir, ws_url) =
+                start_chrome_with_retry(config.port, config.headless, &config.url)?;
+            (Some(child), Some(dir), ws_url)
+        } else {
+            return Err("CDP_NO_CHROME is set; chromium must be started explicitly".to_string());
+        };
+
+        let mut ws = WebSocket::connect(&ws_url)?;
+        {
+            let mut cdp = CdpClient::new(&mut ws);
+            cdp.send("Page.enable", "{}")?;
+            cdp.send("Runtime.enable", "{}")?;
+            cdp.send("Input.enable", "{}")?;
+        }
+
+        Ok(Self {
+            ws,
+            screenshot_dir: config.screenshot_dir.clone(),
+            chrome,
+            server,
+            profile_dir,
+            url: config.url.clone(),
+        })
+    }
+
+    /// Navigate to the configured URL and wait for the app to be ready.
+    /// After this call the app home screen is visible.
+    pub fn navigate_to_app(&mut self) -> Result<(), String> {
+        let url = self.url.clone();
+        let mut cdp = CdpClient::new(&mut self.ws);
+        cdp.send(
+            "Page.navigate",
+            &format!("{{\"url\":\"{}\"}}", url.replace('"', "\\\"")),
+        )?;
+        wait_for_eval_contains(
+            &mut cdp,
+            "document.readyState",
+            "complete",
+            Duration::from_secs(3),
+        )?;
+        wait_for_eval_contains(
+            &mut cdp,
+            "window.__app ? \"ready\" : \"\"",
+            "ready",
+            Duration::from_secs(3),
+        )?;
+        wait_for_a11y(&mut cdp, "GPU Forms UI", Duration::from_secs(3))?;
+        Ok(())
+    }
+
+    /// Click the Dynamic Validation link and wait for the form to appear.
+    /// Assumes `navigate_to_app` has already been called.
+    pub fn open_dynamic_form(&mut self) -> Result<(), String> {
+        let mut cdp = CdpClient::new(&mut self.ws);
+        click_named(&mut cdp, "Dynamic Validation")?;
+        thread::sleep(Duration::from_millis(200));
+        wait_for_a11y(&mut cdp, "Username", Duration::from_secs(3))?;
+        Ok(())
+    }
+
+    /// Type valid values into the Username and Age fields.
+    /// Assumes the dynamic form is already open.
+    pub fn fill_form_valid_input(&mut self) -> Result<(), String> {
+        let mut cdp = CdpClient::new(&mut self.ws);
+        click_named(&mut cdp, "Username")?;
+        cdp.eval_void("window.__app.handle_text_input('user1')")?;
+        tick_app(&mut cdp)?;
+        click_named(&mut cdp, "Age")?;
+        cdp.eval_void("window.__app.handle_text_input('18')")?;
+        tick_app(&mut cdp)?;
+        Ok(())
+    }
+
+    /// Click Submit and wait for the submitting indicator.
+    /// Assumes the form has been filled with valid input.
+    pub fn click_submit_and_wait_for_submitting(&mut self) -> Result<(), String> {
+        let mut cdp = CdpClient::new(&mut self.ws);
+        click_named(&mut cdp, "Submit Profile")?;
+        wait_for_a11y(&mut cdp, "Submitting...", Duration::from_secs(2))?;
+        Ok(())
+    }
+
+    /// Wait for the success confirmation after a submit completes.
+    /// Assumes the submitting state is already showing.
+    pub fn wait_for_success(&mut self) -> Result<(), String> {
+        let mut cdp = CdpClient::new(&mut self.ws);
+        thread::sleep(Duration::from_millis(1100));
+        wait_for_a11y(&mut cdp, "Saved successfully.", Duration::from_secs(3))?;
+        Ok(())
+    }
+
+    /// Click Submit a second time and wait for the server-error rollback message.
+    /// Assumes the success state is currently showing.
+    pub fn click_submit_again_and_wait_for_rollback(&mut self) -> Result<(), String> {
+        let mut cdp = CdpClient::new(&mut self.ws);
+        click_named(&mut cdp, "Submit Profile")?;
+        thread::sleep(Duration::from_millis(1100));
+        wait_for_a11y(&mut cdp, "Server error, rolled back.", Duration::from_secs(3))?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Composite helpers used by individual tests to reach a known start state
+    // -----------------------------------------------------------------------
+
+    /// Fresh load → app home screen.
+    pub fn setup_initial_load(&mut self) -> Result<(), String> {
+        self.navigate_to_app()
+    }
+
+    /// Fresh load → dynamic validation form open.
+    pub fn setup_dynamic_form(&mut self) -> Result<(), String> {
+        self.navigate_to_app()?;
+        self.open_dynamic_form()
+    }
+
+    /// Fresh load → form filled with valid input.
+    pub fn setup_filled_form(&mut self) -> Result<(), String> {
+        self.setup_dynamic_form()?;
+        self.fill_form_valid_input()
+    }
+
+    /// Fresh load → submitting indicator showing.
+    pub fn setup_submitting_state(&mut self) -> Result<(), String> {
+        self.setup_filled_form()?;
+        self.click_submit_and_wait_for_submitting()
+    }
+
+    /// Fresh load → success confirmation showing.
+    pub fn setup_success_state(&mut self) -> Result<(), String> {
+        self.setup_submitting_state()?;
+        self.wait_for_success()
+    }
+
+    /// Fresh load → rollback/server-error message showing.
+    pub fn setup_rollback_state(&mut self) -> Result<(), String> {
+        self.setup_success_state()?;
+        self.click_submit_again_and_wait_for_rollback()
+    }
+
+    /// Take a screenshot and optionally run a visual regression check.
+    /// Returns any regression errors via `regression_errors`.
+    pub fn take_screenshot(
+        &mut self,
+        name: &str,
+        regression_errors: &mut Vec<String>,
+    ) -> Result<(), String> {
+        let mut cdp = CdpClient::new(&mut self.ws);
+        take_screenshot(&mut cdp, &self.screenshot_dir, name, regression_errors)
+    }
+}
+
+impl Drop for BrowserSession {
+    fn drop(&mut self) {
+        if let Some(ref mut child) = self.chrome {
+            let _ = child.kill();
+        }
+        if let Some(ref mut child) = self.server {
+            let _ = child.kill();
+        }
+        if let Some(ref dir) = self.profile_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
 /// Capture a full-page PNG screenshot via CDP, write it to disk, and
 /// optionally compare against a visual baseline.
 ///
@@ -137,80 +326,32 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, &'static str> {
 }
 
 pub fn run(config: Config) -> Result<(), String> {
-    let screenshot_dir = config.screenshot_dir.clone();
-    let mut server = None;
-    if config.start_server {
-        server = Some(start_server()?);
-        thread::sleep(Duration::from_millis(200));
-    }
-
-    let (chrome, profile_dir, ws_url) = if config.start_chrome {
-        let (child, dir, ws_url) =
-            start_chrome_with_retry(config.port, config.headless, &config.url)?;
-        (Some(child), Some(dir), ws_url)
-    } else {
-        return Err("CDP_NO_CHROME is set; chromium must be started explicitly".to_string());
-    };
-    let mut ws = WebSocket::connect(&ws_url)?;
-    let mut cdp = CdpClient::new(&mut ws);
+    let mut session = BrowserSession::launch(&config)?;
     let mut regression_errors: Vec<String> = Vec::new();
 
-    cdp.send("Page.enable", "{}")?;
-    cdp.send("Runtime.enable", "{}")?;
-    cdp.send("Input.enable", "{}")?;
-    cdp.send(
-        "Page.navigate",
-        &format!("{{\"url\":\"{}\"}}", config.url.replace('"', "\\\"")),
-    )?;
-    wait_for_eval_contains(
-        &mut cdp,
-        "document.readyState",
-        "complete",
-        Duration::from_secs(3),
-    )?;
-    wait_for_eval_contains(
-        &mut cdp,
-        "window.__app ? \"ready\" : \"\"",
-        "ready",
-        Duration::from_secs(3),
-    )?;
-    wait_for_a11y(&mut cdp, "GPU Forms UI", Duration::from_secs(3))?;
-    take_screenshot(&mut cdp, &screenshot_dir, "01_loaded", &mut regression_errors)?;
+    // Step 1 — initial load
+    session.navigate_to_app()?;
+    session.take_screenshot("01_loaded", &mut regression_errors)?;
 
-    click_named(&mut cdp, "Dynamic Validation")?;
-    thread::sleep(Duration::from_millis(200));
-    wait_for_a11y(&mut cdp, "Username", Duration::from_secs(3))?;
-    take_screenshot(&mut cdp, &screenshot_dir, "02_dynamic_form", &mut regression_errors)?;
+    // Step 2 — open the Dynamic Validation form
+    session.open_dynamic_form()?;
+    session.take_screenshot("02_dynamic_form", &mut regression_errors)?;
 
-    click_named(&mut cdp, "Username")?;
-    cdp.eval_void("window.__app.handle_text_input('user1')")?;
-    tick_app(&mut cdp)?;
-    click_named(&mut cdp, "Age")?;
-    cdp.eval_void("window.__app.handle_text_input('18')")?;
-    tick_app(&mut cdp)?;
-    take_screenshot(&mut cdp, &screenshot_dir, "03_filled_form", &mut regression_errors)?;
+    // Step 3 — fill in valid input
+    session.fill_form_valid_input()?;
+    session.take_screenshot("03_filled_form", &mut regression_errors)?;
 
-    click_named(&mut cdp, "Submit Profile")?;
-    wait_for_a11y(&mut cdp, "Submitting...", Duration::from_secs(2))?;
-    take_screenshot(&mut cdp, &screenshot_dir, "04_submitting", &mut regression_errors)?;
-    thread::sleep(Duration::from_millis(1100));
-    wait_for_a11y(&mut cdp, "Saved successfully.", Duration::from_secs(3))?;
-    take_screenshot(&mut cdp, &screenshot_dir, "05_success", &mut regression_errors)?;
+    // Step 4 — submit and capture the submitting indicator
+    session.click_submit_and_wait_for_submitting()?;
+    session.take_screenshot("04_submitting", &mut regression_errors)?;
 
-    click_named(&mut cdp, "Submit Profile")?;
-    thread::sleep(Duration::from_millis(1100));
-    wait_for_a11y(&mut cdp, "Server error, rolled back.", Duration::from_secs(3))?;
-    take_screenshot(&mut cdp, &screenshot_dir, "06_rollback", &mut regression_errors)?;
+    // Step 5 — wait for success confirmation
+    session.wait_for_success()?;
+    session.take_screenshot("05_success", &mut regression_errors)?;
 
-    if let Some(mut child) = chrome {
-        let _ = child.kill();
-    }
-    if let Some(mut child) = server {
-        let _ = child.kill();
-    }
-    if let Some(dir) = profile_dir {
-        let _ = std::fs::remove_dir_all(dir);
-    }
+    // Step 6 — re-submit to trigger server error rollback
+    session.click_submit_again_and_wait_for_rollback()?;
+    session.take_screenshot("06_rollback", &mut regression_errors)?;
 
     // Report visual regression failures after all screenshots are captured.
     if !regression_errors.is_empty() {

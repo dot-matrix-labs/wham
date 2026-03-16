@@ -1109,6 +1109,7 @@ dependencies = [
 name = "wham-test"
 version = "0.1.0"
 dependencies = [
+ "fontdue",
  "png 0.17.16",
  "ui-core",
 ]
