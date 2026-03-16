@@ -293,6 +293,14 @@ pub struct Ui {
     /// `text_input_for` / `text_input_masked_for` to eliminate manual
     /// buffer management.
     form_buffers: HashMap<FormPath, TextBuffer>,
+    /// Safe area insets `[top, right, bottom, left]` in logical (CSS) pixels.
+    ///
+    /// On modern phones with notches, rounded corners, or home indicators these
+    /// values are non-zero. They are added on top of the existing outer layout
+    /// margins so that all widget content stays within the safe area. On
+    /// desktop or SE-style devices without hardware cutouts all four values
+    /// remain zero and layout is unchanged.
+    safe_area: [f32; 4],
     /// Returns the advance width (in pixels) for a character at a given font
     /// size. The default implementation returns `font_size * 0.6` (the old
     /// monospace approximation). The wasm layer replaces this with a closure
@@ -355,6 +363,7 @@ impl Ui {
             dropdown_selection: None,
             id_stack: Vec::new(),
             form_buffers: HashMap::new(),
+            safe_area: [0.0; 4],
             char_advance: Box::new(|_ch, font_size| font_size * 0.6),
             icon_pack: None,
         }
@@ -454,6 +463,24 @@ impl Ui {
         self.time_ms
     }
 
+    /// Set the safe area insets in logical (CSS) pixels.
+    ///
+    /// Call this whenever the insets change — on initial load, on `resize`,
+    /// and on `orientationchange`. Insets are applied as additional outer
+    /// margins on top of the existing 24 px default, so the usable widget
+    /// rect is always clear of notches, home indicators, and rounded corners.
+    ///
+    /// `insets` is `[top, right, bottom, left]`. Pass `[0.0; 4]` on
+    /// desktop / SE-style devices.
+    pub fn set_safe_area_insets(&mut self, insets: [f32; 4]) {
+        self.safe_area = insets;
+    }
+
+    /// Returns the current safe area insets `[top, right, bottom, left]`.
+    pub fn safe_area_insets(&self) -> [f32; 4] {
+        self.safe_area
+    }
+
     // -----------------------------------------------------------------
     // Frame lifecycle
     // -----------------------------------------------------------------
@@ -469,7 +496,14 @@ impl Ui {
         self.events = events;
         self.widgets.clear();
         self.batch.clear();
-        self.layout = Layout::new(24.0, 24.0, width - 48.0);
+        // Apply safe area insets on top of the existing 24 px outer margins.
+        // safe_area = [top, right, bottom, left]
+        let sa = self.safe_area;
+        let margin_left = 24.0 + sa[3];
+        let margin_top = 24.0 + sa[0];
+        let margin_right = 24.0 + sa[1];
+        let usable_width = (width - margin_left - margin_right).max(0.0);
+        self.layout = Layout::new(margin_left, margin_top, usable_width);
         self.hit_test = HitTestGrid::new(width, height, 48.0);
         self.scale = scale;
         self.hovered = None;
@@ -3141,5 +3175,61 @@ mod tests {
         ui.end_frame();
         // end_frame should have rendered the panel (background + highlighted item)
         assert!(ui.batch.vertices.len() > verts_before);
+    }
+
+    // -----------------------------------------------------------------------
+    // Safe area insets
+    // -----------------------------------------------------------------------
+
+    /// Non-zero insets must shift the layout origin and reduce the usable
+    /// width by the corresponding amounts.
+    #[test]
+    fn safe_area_insets_offset_layout() {
+        let mut ui = test_ui();
+
+        // Typical phone notch + home bar: top=50, right=10, bottom=34, left=20.
+        ui.set_safe_area_insets([50.0, 10.0, 34.0, 20.0]);
+
+        // begin_frame rebuilds the layout using the stored insets.
+        ui.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+
+        // Expected origin: x = 24 (base margin) + 20 (safe left) = 44
+        //                  y = 24 (base margin) + 50 (safe top)  = 74
+        assert_eq!(
+            ui.layout.cursor,
+            Vec2::new(44.0, 74.0),
+            "layout origin should be offset by safe area insets"
+        );
+
+        // Expected usable width: 800 - (24 + 20) - (24 + 10) = 800 - 44 - 34 = 722
+        assert_eq!(
+            ui.layout.width,
+            722.0,
+            "layout width should be reduced by left and right insets"
+        );
+    }
+
+    /// When all insets are zero the layout must be identical to a fresh Ui
+    /// with no safe area applied — ensuring backward compatibility on desktop
+    /// and SE-style devices.
+    #[test]
+    fn zero_insets_unchanged() {
+        let mut ui_no_insets = test_ui();
+        ui_no_insets.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+
+        let mut ui_zero_insets = test_ui();
+        ui_zero_insets.set_safe_area_insets([0.0; 4]);
+        ui_zero_insets.begin_frame(vec![], 800.0, 600.0, 1.0, 0.0);
+
+        assert_eq!(
+            ui_no_insets.layout.cursor,
+            ui_zero_insets.layout.cursor,
+            "zero insets must not change the layout origin"
+        );
+        assert_eq!(
+            ui_no_insets.layout.width,
+            ui_zero_insets.layout.width,
+            "zero insets must not change the layout width"
+        );
     }
 }

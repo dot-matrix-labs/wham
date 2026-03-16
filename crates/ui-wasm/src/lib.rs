@@ -134,6 +134,16 @@ impl WasmApp {
         self.runtime.reinitialize_renderer()
     }
 
+    /// Update the safe area insets in logical (CSS) pixels.
+    ///
+    /// Call this on page load, on every `resize` event, and on every
+    /// `orientationchange` event. Values correspond to
+    /// `env(safe-area-inset-top/right/bottom/left)`. On desktop or
+    /// SE-style phones without hardware cutouts all values should be `0`.
+    pub fn set_safe_area_insets(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
+        self.runtime.set_safe_area_insets(top, right, bottom, left);
+    }
+
     /// Set focus to the widget with the given ID.
     /// Called from the accessibility mirror when the screen reader moves focus.
     pub fn set_focus(&mut self, id: f64) {

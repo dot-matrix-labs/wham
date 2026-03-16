@@ -534,9 +534,24 @@ async function main() {
     }
   });
 
+  // Send initial safe area insets before the first frame.
+  updateSafeAreaInsets(app);
+
   window.addEventListener("resize", () => {
     resize();
     app.resize(canvas.width, canvas.height, dpr);
+    // Safe area may change on resize (e.g. split-screen mode on iPad).
+    updateSafeAreaInsets(app);
+  });
+
+  // Orientation change on phones can flip which edges have insets.
+  window.addEventListener("orientationchange", () => {
+    // Wait one rAF for the browser to reflow and update env() values.
+    requestAnimationFrame(() => {
+      resize();
+      app.resize(canvas.width, canvas.height, dpr);
+      updateSafeAreaInsets(app);
+    });
   });
 
   // --- visualViewport resize (virtual keyboard open/close) ---

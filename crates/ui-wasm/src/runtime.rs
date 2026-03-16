@@ -332,6 +332,22 @@ impl<A: FormApp> WasmRuntime<A> {
     }
 
     // -----------------------------------------------------------------
+    // Safe area
+    // -----------------------------------------------------------------
+
+    /// Update the safe area insets in logical (CSS) pixels.
+    ///
+    /// Should be called on initial load, on every `resize` event, and on
+    /// every `orientationchange` event so that layout always reflects the
+    /// current hardware cutout geometry.
+    ///
+    /// `top`, `right`, `bottom`, `left` correspond to
+    /// `env(safe-area-inset-top/right/bottom/left)`.
+    pub fn set_safe_area_insets(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
+        self.ui.set_safe_area_insets([top, right, bottom, left]);
+    }
+
+    // -----------------------------------------------------------------
     // Context loss
     // -----------------------------------------------------------------
 
