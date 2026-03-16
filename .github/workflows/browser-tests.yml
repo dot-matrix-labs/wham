@@ -17,7 +17,7 @@ jobs:
 
     steps:
       # ── Checkout ─────────────────────────────────────────────────────────────
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       # ── Rust toolchain ───────────────────────────────────────────────────────
       - name: Install Rust stable + wasm32 target
@@ -26,7 +26,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -79,7 +79,7 @@ jobs:
       # ── Upload screenshots as artifacts ──────────────────────────────────────
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: browser-screenshots-${{ github.run_number }}
           path: screenshots/
@@ -89,7 +89,7 @@ jobs:
       # ── Upload visual regression diffs on failure ────────────────────────────
       - name: Upload visual regression diffs
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: visual-regression-diffs-${{ github.run_number }}
           path: |
