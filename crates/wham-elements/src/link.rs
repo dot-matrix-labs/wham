@@ -58,10 +58,7 @@ impl Link {
     /// Process a single input event and return the resulting action.
     pub fn handle_event(&mut self, event: &InputEvent) -> LinkAction {
         match event {
-            InputEvent::KeyDown { code, .. } => match code {
-                KeyCode::Enter => LinkAction::Followed,
-                _ => LinkAction::None,
-            },
+            InputEvent::KeyDown { code: KeyCode::Enter, .. } => LinkAction::Followed,
             _ => LinkAction::None,
         }
     }
