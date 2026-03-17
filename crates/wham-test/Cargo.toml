@@ -8,6 +8,7 @@ description = "Visual regression test helpers for the wham GPU-rendered forms li
 path = "src/lib.rs"
 
 [dependencies]
+wham-core = { path = "../wham-core" }
 ui-core = { path = "../ui-core" }
 png = "0.17"
 fontdue = "0.8"

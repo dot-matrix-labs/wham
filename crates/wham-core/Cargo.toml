@@ -1,0 +1,11 @@
+[package]
+name = "wham-core"
+version = "0.1.0"
+edition = "2021"
+description = "Platform-agnostic primitive kernel for the wham GPU-rendered forms library"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }

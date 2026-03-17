@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::types::Rect;
+use wham_core::types::Rect;
 
 /// Identifier for a loaded icon within an icon pack.
 /// Cheap to copy. Used by widgets to reference icons.

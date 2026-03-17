@@ -50,7 +50,7 @@ pub trait FormApp {
 mod tests {
     use super::*;
     use crate::form::{FieldSchema, FieldType, FieldValue, FormPath, FormSchema};
-    use crate::theme::Theme;
+    use wham_core::theme::Theme;
     use crate::validation::ValidationRule;
 
     /// A minimal FormApp implementation for testing.
