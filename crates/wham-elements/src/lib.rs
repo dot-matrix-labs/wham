@@ -24,7 +24,7 @@ pub mod text;
 /// ARIA role: none (structural) — validation rules and error types for form fields.
 pub mod validation;
 
-pub use accessibility::{A11yNode, A11yRole, A11yState, A11yTree};
+pub use accessibility::{A11yNode, A11yNodeEl, A11yRole, A11yState, A11yTree, A11yTreeEl};
 pub use form::{
     AutocompleteHint, FieldId, FieldSchema, FieldState, FieldType, FieldValue, Form, FormEvent,
     FormPath, FormSchema, FormState, PendingSubmission,

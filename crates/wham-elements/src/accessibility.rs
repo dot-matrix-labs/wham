@@ -1,7 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-use wham_core::types::Rect;
+// Re-export role-independent core primitives so callers can import everything
+// from a single module path.
+pub use wham_core::accessibility::{A11yNode, A11yState, A11yTree};
 
+/// ARIA roles recognised by the wham element layer.
+///
+/// The concrete role type used with [`A11yNode<A11yRole>`] and
+/// [`A11yTree<A11yRole>`].  `wham-core` itself never references this enum —
+/// it is deliberately restricted to the element layer.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum A11yRole {
     Form,
@@ -14,42 +21,8 @@ pub enum A11yRole {
     ComboBox,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct A11yState {
-    pub focused: bool,
-    pub disabled: bool,
-    pub invalid: bool,
-    pub required: bool,
-    pub expanded: bool,
-    pub selected: bool,
-}
+/// Convenience alias: an [`A11yNode`] whose role is [`A11yRole`].
+pub type A11yNodeEl = A11yNode<A11yRole>;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct A11yNode {
-    pub id: u64,
-    pub role: A11yRole,
-    pub name: String,
-    pub value: Option<String>,
-    pub bounds: Rect,
-    pub state: A11yState,
-    pub children: Vec<A11yNode>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct A11yTree {
-    pub root: A11yNode,
-}
-
-impl A11yTree {
-    pub fn flatten(&self) -> Vec<&A11yNode> {
-        let mut out = Vec::new();
-        fn walk<'a>(node: &'a A11yNode, out: &mut Vec<&'a A11yNode>) {
-            out.push(node);
-            for child in &node.children {
-                walk(child, out);
-            }
-        }
-        walk(&self.root, &mut out);
-        out
-    }
-}
+/// Convenience alias: an [`A11yTree`] whose role is [`A11yRole`].
+pub type A11yTreeEl = A11yTree<A11yRole>;

@@ -47,7 +47,7 @@ pub use wham_core::theme::{Theme, ThemeColors};
 pub use wham_core::types::{Color, Rect, Vec2};
 
 // Re-export wham-elements (form model, text editing, validation, accessibility)
-pub use wham_elements::accessibility::{A11yNode, A11yRole, A11yState, A11yTree};
+pub use wham_elements::accessibility::{A11yNode, A11yNodeEl, A11yRole, A11yState, A11yTree, A11yTreeEl};
 pub use wham_elements::form::{
     AutocompleteHint, FieldId, FieldSchema, FieldState, FieldType, FieldValue, Form, FormEvent,
     FormPath, FormSchema, FormState, PendingSubmission,

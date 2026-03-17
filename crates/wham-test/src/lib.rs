@@ -573,7 +573,7 @@ fn build_diff_image(
 // ---------------------------------------------------------------------------
 
 use ui_core::{
-    accessibility::A11yTree,
+    accessibility::{A11yRole, A11yTree},
     input::InputEvent,
     types::Vec2,
     ui::{WidgetInfo, WidgetKind},
@@ -588,7 +588,7 @@ pub struct FrameResult {
     pub text_runs: Vec<TextRun>,
     /// Number of solid quads in the draw batch (vertex count / 4).
     pub quad_count: usize,
-    pub a11y: A11yTree,
+    pub a11y: A11yTree<A11yRole>,
 }
 
 impl FrameResult {

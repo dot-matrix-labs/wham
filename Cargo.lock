@@ -949,6 +949,7 @@ dependencies = [
  "ui-core",
  "wasm-bindgen",
  "web-sys",
+ "wham-core",
 ]
 
 [[package]]
@@ -1134,6 +1135,7 @@ dependencies = [
  "fontdue",
  "png 0.17.16",
  "ui-core",
+ "wham-core",
 ]
 
 [[package]]

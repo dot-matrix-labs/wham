@@ -708,7 +708,7 @@ impl Ui {
     /// Must be called once after all widgets have been emitted. Handles Tab-key
     /// navigation, draws the focus ring, flushes the dropdown panel, and registers
     /// all widget rects with the hit-test grid.
-    pub fn end_frame(&mut self) -> A11yTree {
+    pub fn end_frame(&mut self) -> A11yTree<A11yRole> {
         self.handle_keyboard_navigation();
         self.draw_focus_ring();
         self.render_dropdown_panel();
