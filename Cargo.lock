@@ -932,6 +932,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "unicode-segmentation",
+ "wham-core",
 ]
 
 [[package]]
@@ -947,6 +948,7 @@ dependencies = [
  "ui-core",
  "wasm-bindgen",
  "web-sys",
+ "wham-core",
 ]
 
 [[package]]
@@ -1106,12 +1108,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wham-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "wham-test"
 version = "0.1.0"
 dependencies = [
  "fontdue",
  "png 0.17.16",
  "ui-core",
+ "wham-core",
 ]
 
 [[package]]

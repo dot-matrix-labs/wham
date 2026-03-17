@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::accessibility::{A11yNode, A11yRole, A11yState, A11yTree};
-use crate::batch::{Batch, DirtyTracker, Material, Quad, TextRun, WidgetId};
+use wham_core::batch::{Batch, DirtyTracker, Material, Quad, TextRun, WidgetId};
+use wham_core::hit_test::{HitTestEntry, HitTestGrid};
+use wham_core::input::{InputEvent, KeyCode, PointerButton};
+use wham_core::theme::Theme;
+use wham_core::types::{Color, Rect, Vec2};
 use crate::form::{FieldValue, Form, FormPath};
-use crate::hit_test::{HitTestEntry, HitTestGrid};
 use crate::icon::{IconId, IconPack};
-use crate::input::{InputEvent, KeyCode, PointerButton};
 use crate::text::TextBuffer;
-use crate::theme::Theme;
-use crate::types::{Color, Rect, Vec2};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Persistent scroll state for a single scroll container, keyed by widget ID.
@@ -2331,8 +2331,8 @@ impl Ui {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::{Modifiers, PointerEvent, TextInputEvent};
-    use crate::theme::Theme;
+    use wham_core::input::{Modifiers, PointerEvent, TextInputEvent};
+    use wham_core::theme::Theme;
 
     fn test_ui() -> Ui {
         Ui::new(800.0, 600.0, Theme::default_light())

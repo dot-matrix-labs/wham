@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/wham-core",
   "crates/ui-core",
   "crates/ui-wasm",
   "crates/cdp-runner",

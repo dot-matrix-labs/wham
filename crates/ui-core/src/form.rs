@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::state::History;
+use wham_core::state::History;
 use crate::validation::{validate_value, ValidationError, ValidationRule};
 
 /// A field identifier — an owned `String` used as a key in form paths and schemas.
