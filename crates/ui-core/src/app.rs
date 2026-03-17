@@ -1,4 +1,4 @@
-use crate::form::{Form, FormSchema};
+use wham_elements::form::{Form, FormSchema};
 use crate::ui::Ui;
 
 /// Trait for building form-based applications on top of the GPU-rendered UI.
@@ -49,9 +49,9 @@ pub trait FormApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::form::{FieldSchema, FieldType, FieldValue, FormPath, FormSchema};
+    use wham_elements::form::{FieldSchema, FieldType, FieldValue, FormPath, FormSchema};
     use wham_core::theme::Theme;
-    use crate::validation::ValidationRule;
+    use wham_elements::validation::ValidationRule;
 
     /// A minimal FormApp implementation for testing.
     struct TestApp {

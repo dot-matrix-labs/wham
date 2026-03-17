@@ -933,6 +933,7 @@ dependencies = [
  "thiserror",
  "unicode-segmentation",
  "wham-core",
+ "wham-elements",
 ]
 
 [[package]]
@@ -948,7 +949,6 @@ dependencies = [
  "ui-core",
  "wasm-bindgen",
  "web-sys",
- "wham-core",
 ]
 
 [[package]]
@@ -1115,13 +1115,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "wham-elements"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "proptest",
+ "regex",
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
+ "wham-core",
+]
+
+[[package]]
 name = "wham-test"
 version = "0.1.0"
 dependencies = [
  "fontdue",
  "png 0.17.16",
  "ui-core",
- "wham-core",
 ]
 
 [[package]]

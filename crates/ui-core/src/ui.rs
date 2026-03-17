@@ -2,15 +2,15 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use crate::accessibility::{A11yNode, A11yRole, A11yState, A11yTree};
+use wham_elements::accessibility::{A11yNode, A11yRole, A11yState, A11yTree};
 use wham_core::batch::{Batch, DirtyTracker, Material, Quad, TextRun, WidgetId};
 use wham_core::hit_test::{HitTestEntry, HitTestGrid};
 use wham_core::input::{InputEvent, KeyCode, PointerButton};
 use wham_core::theme::Theme;
 use wham_core::types::{Color, Rect, Vec2};
-use crate::form::{FieldValue, Form, FormPath};
-use crate::icon::{IconId, IconPack};
-use crate::text::TextBuffer;
+use wham_elements::form::{FieldValue, Form, FormPath};
+use wham_elements::icon::{IconId, IconPack};
+use wham_elements::text::TextBuffer;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Persistent scroll state for a single scroll container, keyed by widget ID.
@@ -2591,7 +2591,7 @@ mod tests {
     // Form-bound text input (text_input_for / text_input_masked_for)
     // -----------------------------------------------------------------------
 
-    use crate::form::{FieldSchema, FieldType, FormSchema};
+    use wham_elements::form::{FieldSchema, FieldType, FormSchema};
 
     fn simple_form_schema() -> FormSchema {
         FormSchema::new("test")
