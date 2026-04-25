@@ -1,0 +1,15 @@
+[package]
+name = "wham-ui"
+edition = "2021"
+version = "0.1.0"
+description = "Rich navigation UI kit built on wham-core and wham-elements"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+wham-core = { path = "../wham-core" }
+wham-elements = { path = "../wham-elements" }
+
+[dev-dependencies]
+wham-test = { path = "../wham-test" }

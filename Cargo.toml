@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
   "crates/wham-core",
+  "crates/wham-elements",
+  "crates/wham-ui",
   "crates/ui-core",
   "crates/ui-wasm",
   "crates/cdp-runner",

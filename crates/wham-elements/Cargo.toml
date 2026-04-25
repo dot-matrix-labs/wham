@@ -1,0 +1,11 @@
+[package]
+name = "wham-elements"
+edition = "2021"
+version = "0.1.0"
+description = "HTML-spec element layer for the wham GPU-rendered forms library"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+wham-core = { path = "../wham-core" }

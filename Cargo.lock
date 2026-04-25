@@ -1115,6 +1115,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "wham-elements"
+version = "0.1.0"
+dependencies = [
+ "wham-core",
+]
+
+[[package]]
 name = "wham-test"
 version = "0.1.0"
 dependencies = [
@@ -1122,6 +1129,15 @@ dependencies = [
  "png 0.17.16",
  "ui-core",
  "wham-core",
+]
+
+[[package]]
+name = "wham-ui"
+version = "0.1.0"
+dependencies = [
+ "wham-core",
+ "wham-elements",
+ "wham-test",
 ]
 
 [[package]]
